@@ -1,0 +1,286 @@
+name: "Build Kernel with KernelSU"
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Clean build'
+        required: false
+        default: 'false'
+
+env:
+  # إعدادات أساسية
+  KERNEL_NAME: "xcalibur-kernel"
+  ARCH: "arm64"
+  CONFIG: "violet-perf_defconfig"
+  
+  # KernelSU
+  KSU_REPO: "https://github.com/tiann/KernelSU"
+  KSU_BRANCH: "main"
+  
+  # Toolchain (رابط يعمل)
+  CLANG_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/clang+llvm-17.0.6-aarch64-linux-gnu.tar.xz"
+  
+  # أي عدد أنوية
+  JOBS: 4
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: "📥 Checkout kernel source"
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: "📦 Install dependencies"
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          gcc-aarch64-linux-gnu \
+          libncurses-dev \
+          libssl-dev \
+          bc \
+          flex \
+          bison \
+          git \
+          wget \
+          xz-utils \
+          make \
+          python3 \
+          cpio
+
+    - name: "🔧 Setup Clang toolchain"
+      run: |
+        echo "Setting up Clang toolchain..."
+        wget -q $CLANG_URL -O clang.tar.xz
+        mkdir -p clang-toolchain
+        tar -xf clang.tar.xz -C clang-toolchain --strip-components=1
+        rm -f clang.tar.xz
+        
+        # Verify
+        if [ -f "clang-toolchain/bin/clang" ]; then
+          echo "✅ Clang installed"
+          echo "$PWD/clang-toolchain/bin" >> $GITHUB_PATH
+        else
+          echo "❌ Clang installation failed"
+          # Fallback to system clang
+          sudo apt-get install -y clang lld
+        fi
+
+    - name: "📦 Add KernelSU to kernel"
+      id: setup_ksu
+      run: |
+        echo "Adding KernelSU to kernel..."
+        
+        # Clone KernelSU
+        git clone $KSU_REPO --depth=1 --branch=$KSU_BRANCH /tmp/kernelsu || \
+          git clone $KSU_REPO --depth=1 /tmp/kernelsu
+        
+        # Copy kernel sources
+        if [ -d "/tmp/kernelsu/kernel" ]; then
+          echo "Found kernel sources directory"
+          mkdir -p drivers/kernelsu
+          cp -r /tmp/kernelsu/kernel/* drivers/kernelsu/
+          
+          # Count files
+          FILE_COUNT=$(find drivers/kernelsu -name "*.c" -o -name "*.h" | wc -l)
+          echo "Copied $FILE_COUNT KernelSU files"
+          
+          if [ $FILE_COUNT -gt 0 ]; then
+            echo "ksu_added=true" >> $GITHUB_OUTPUT
+          else
+            echo "ksu_added=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "Warning: KernelSU kernel directory not found"
+          echo "ksu_added=false" >> $GITHUB_OUTPUT
+        fi
+        
+        # Cleanup
+        rm -rf /tmp/kernelsu
+
+    - name: "⚙️ Configure kernel"
+      run: |
+        echo "Configuring kernel..."
+        
+        # Try to load config
+        if [ -f "arch/$ARCH/configs/$CONFIG" ]; then
+          make ARCH=$ARCH $CONFIG
+        elif [ -f "arch/$ARCH/configs/defconfig" ]; then
+          make ARCH=$ARCH defconfig
+        else
+          # Create minimal config
+          echo "Creating minimal config..."
+          make ARCH=$ARCH menuconfig 2>/dev/null || make ARCH=$ARCH defconfig
+        fi
+        
+        # Add KernelSU config
+        if ! grep -q "CONFIG_KSU" .config 2>/dev/null; then
+          echo "CONFIG_KSU=y" >> .config
+          echo "CONFIG_KSU_DEBUG=n" >> .config
+          echo "Added KernelSU config"
+        fi
+        
+        # Finalize config
+        make ARCH=$ARCH olddefconfig
+        
+        echo "Kernel configuration complete"
+
+    - name: "🚀 Compile kernel"
+      id: compile
+      run: |
+        echo "Starting kernel compilation..."
+        echo "Using $JOBS parallel jobs"
+        
+        # Start timer
+        START_TIME=$(date +%s)
+        
+        # Try different compilation methods
+        echo "Method 1: Using Clang..."
+        if make -j$JOBS ARCH=$ARCH CC="clang" CROSS_COMPILE="aarch64-linux-gnu-" LLVM=1 2>&1 | tee build.log; then
+          echo "✅ Compilation successful with Clang"
+        else
+          echo "⚠️ Clang failed, trying GCC..."
+          if make -j$JOBS ARCH=$ARCH CROSS_COMPILE="aarch64-linux-gnu-" 2>&1 | tee -a build.log; then
+            echo "✅ Compilation successful with GCC"
+          else
+            echo "❌ Compilation failed"
+            
+            # Show errors
+            echo "=== Last 30 lines of build log ==="
+            tail -30 build.log
+            echo "=== End of log ==="
+            
+            exit 1
+          fi
+        fi
+        
+        END_TIME=$(date +%s)
+        BUILD_TIME=$((END_TIME - START_TIME))
+        echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
+        echo "Compilation time: ${BUILD_TIME}s"
+
+    - name: "✅ Verify kernel image"
+      id: verify
+      run: |
+        echo "Verifying kernel image..."
+        
+        # Check for compiled kernel
+        if [ -f "arch/$ARCH/boot/Image" ]; then
+          SIZE=$(du -h "arch/$ARCH/boot/Image" | cut -f1)
+          echo "✅ Kernel image found: arch/$ARCH/boot/Image ($SIZE)"
+          echo "kernel_image=Image" >> $GITHUB_OUTPUT
+          echo "build_success=true" >> $GITHUB_OUTPUT
+          
+        elif [ -f "arch/$ARCH/boot/Image.gz" ]; then
+          SIZE=$(du -h "arch/$ARCH/boot/Image.gz" | cut -f1)
+          echo "✅ Compressed kernel image found: arch/$ARCH/boot/Image.gz ($SIZE)"
+          echo "kernel_image=Image.gz" >> $GITHUB_OUTPUT
+          echo "build_success=true" >> $GITHUB_OUTPUT
+          
+        elif [ -f "arch/$ARCH/boot/Image.gz-dtb" ]; then
+          SIZE=$(du -h "arch/$ARCH/boot/Image.gz-dtb" | cut -f1)
+          echo "✅ DTB kernel image found: arch/$ARCH/boot/Image.gz-dtb ($SIZE)"
+          echo "kernel_image=Image.gz-dtb" >> $GITHUB_OUTPUT
+          echo "build_success=true" >> $GITHUB_OUTPUT
+          
+        else
+          echo "❌ No kernel image found"
+          echo "Looking for kernel files..."
+          find arch/$ARCH/boot/ -type f 2>/dev/null | while read file; do
+            echo "  Found: $file"
+          done
+          
+          echo "build_success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+    - name: "📦 Package kernel"
+      if: steps.verify.outputs.build_success == 'true'
+      run: |
+        echo "Packaging kernel..."
+        
+        # Create output directory
+        mkdir -p kernel-output
+        
+        # Copy kernel image
+        KERNEL_IMAGE="${{ steps.verify.outputs.kernel_image }}"
+        cp "arch/$ARCH/boot/$KERNEL_IMAGE" kernel-output/
+        
+        # Copy dtbo if exists
+        if [ -f "arch/$ARCH/boot/dtbo.img" ]; then
+          cp "arch/$ARCH/boot/dtbo.img" kernel-output/
+          echo "✅ Included dtbo.img"
+        fi
+        
+        # Copy dtb if exists
+        if [ -f "arch/$ARCH/boot/dtb" ]; then
+          cp "arch/$ARCH/boot/dtb" kernel-output/
+          echo "✅ Included dtb"
+        fi
+        
+        # Create info file
+        cat > kernel-output/build-info.txt << EOF
+Kernel: $KERNEL_NAME
+Architecture: $ARCH
+KernelSU: $KSU_BRANCH
+Build Time: ${BUILD_TIME}s
+Build Date: $(date)
+Git Commit: $(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+EOF
+        
+        # Create simple flash script
+        cat > kernel-output/flash.sh << 'EOF'
+#!/bin/bash
+echo "Kernel flash script"
+echo "Copy the kernel image to your device and flash using:"
+echo "fastboot flash boot kernel-image"
+echo ""
+echo "Or use TWRP/OrangeFox recovery"
+EOF
+        chmod +x kernel-output/flash.sh
+        
+        echo "✅ Kernel packaged in kernel-output/ directory"
+
+    - name: "📤 Upload artifacts"
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-build-${{ github.run_number }}
+        path: |
+          kernel-output/
+          build.log
+        retention-days: 30
+
+    - name: "🎉 Build summary"
+      if: always()
+      run: |
+        echo ""
+        echo "========================================"
+        echo "         BUILD SUMMARY"
+        echo "========================================"
+        
+        if [ "${{ steps.verify.outputs.build_success }}" = "true" ]; then
+          echo "✅ STATUS: SUCCESS"
+          echo "🏗️  KERNEL: $KERNEL_NAME"
+          echo "⚡ ARCH: $ARCH"
+          echo "⏱️  TIME: ${BUILD_TIME}s"
+          echo "📦 OUTPUT: kernel-output/"
+          echo "🔧 KSU: $KSU_BRANCH"
+        else
+          echo "❌ STATUS: FAILED"
+          echo "Check the build logs for errors"
+        fi
+        
+        echo "========================================"
+        echo ""
+        
+        if [ "${{ steps.verify.outputs.build_success }}" = "true" ]; then
+          echo "Next steps:"
+          echo "1. Download artifacts from GitHub Actions"
+          echo "2. Copy kernel image to your device"
+          echo "3. Flash using fastboot or recovery"
+        fi
