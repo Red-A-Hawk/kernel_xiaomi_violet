@@ -1,4 +1,3 @@
-# محتوى الملف: .github/workflows/build.yml
 name: "Build Kernel with KernelSU"
 
 on:
@@ -36,8 +35,8 @@ jobs:
     - name: "Start Build"
       run: |
         echo "========================================"
-        echo "Building ${{ env.KERNEL_NAME }}"
-        echo "Device: ${{ env.DEVICE_CODENAME }}"
+        echo "Building $KERNEL_NAME"
+        echo "Device: $DEVICE_CODENAME"
         echo "========================================"
 
     - name: "Checkout Kernel Source"
@@ -73,7 +72,7 @@ jobs:
     - name: "Download Toolchain"
       run: |
         echo "Downloading toolchain..."
-        wget -q "${{ env.TOOLCHAIN_URL }}" -O clang.tar.gz
+        wget -q "$TOOLCHAIN_URL" -O clang.tar.gz
         mkdir -p toolchain
         tar -xzf clang.tar.gz -C toolchain --strip-components=1
         rm -f clang.tar.gz
@@ -96,9 +95,9 @@ jobs:
         rm -rf drivers/kernelsu 2>/dev/null || true
         
         # Clone KernelSU
-        git clone "${{ env.KSU_REPO }}" \
+        git clone "$KSU_REPO" \
           --depth=1 \
-          --branch "${{ env.KSU_BRANCH }}" \
+          --branch "$KSU_BRANCH" \
           /tmp/kernelsu
         
         # Check structure
@@ -191,8 +190,8 @@ jobs:
         mkdir -p out
         
         # Generate initial config
-        make ARCH=${{ env.ARCH }} O=out ${{ env.CONFIG_FILE }} || \
-          make ARCH=${{ env.ARCH }} O=out defconfig
+        make ARCH=$ARCH O=out $CONFIG_FILE || \
+          make ARCH=$ARCH O=out defconfig
         
         # Add KernelSU configuration
         cat >> out/.config << 'EOF'
@@ -204,7 +203,7 @@ CONFIG_KSU_EXFAT_SUPPORT=y
 EOF
         
         # Update configuration
-        make ARCH=${{ env.ARCH }} O=out olddefconfig
+        make ARCH=$ARCH O=out olddefconfig
         
         # Show important configs
         echo "Kernel configuration summary:"
@@ -218,9 +217,9 @@ EOF
         START_TIME=$(date +%s)
         
         # Compile with Clang
-        make -j${{ env.JOBS }} \
+        make -j$JOBS \
           O=out \
-          ARCH=${{ env.ARCH }} \
+          ARCH=$ARCH \
           CC="clang" \
           LD="ld.lld" \
           AR="llvm-ar" \
@@ -291,7 +290,7 @@ EOF
         rm -rf anykernel 2>/dev/null || true
         
         # Clone AnyKernel3
-        git clone "${{ env.ANY_KERNEL_REPO }}" \
+        git clone "$ANY_KERNEL_REPO" \
           --depth=1 \
           anykernel
         
@@ -332,7 +331,7 @@ EOF
         fi
         
         # Create ZIP
-        ZIP_NAME="xcalibur-ksu-${{ github.run_number }}-${{ env.DEVICE_CODENAME }}.zip"
+        ZIP_NAME="xcalibur-ksu-${{ github.run_number }}-$DEVICE_CODENAME.zip"
         zip -r9 "../$ZIP_NAME" ./* -x ".git/*" > /dev/null
         
         cd ..
