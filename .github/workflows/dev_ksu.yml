@@ -1,0 +1,265 @@
+name: "🚀 Build Kernel with KernelSU Next Dev"
+
+on:
+  workflow_dispatch:
+
+env:
+  KERNEL_NAME: "xcalibur-v5.4-violet-dynamic-ksu"
+  ARCH: "arm64"
+  CONFIG_FILE: "vendor/violet-perf_defconfig"
+  OUTPUT_DIR: "${{ github.workspace }}/out"
+  ANYKERNEL_DIR: "${{ github.workspace }}/anykernel"
+  CLANG_DIR: "${{ github.workspace }}/clang"
+  KERNELSU_DIR: "${{ github.workspace }}/kernelsu-dev"
+  ZIP_NAME: "kernel-$(date +%d%m%Y-%H%M).zip"
+  SIGNED_ZIP_NAME: "kernel-$(date +%d%m%Y-%H%M)-signed.zip"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    # ==================== 1. تحميل مصدر النواة ====================
+    - name: "📥 تحميل مصدر النواة"
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # ==================== 2. تثبيت المتطلبات ====================
+    - name: "📦 تثبيت أدوات البناء"
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          bc build-essential git make wget tar xz-utils curl \
+          libssl-dev libelf-dev flex bison dwarves libncurses-dev \
+          binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
+          default-jre default-jdk \
+          ccache lz4 cpio rsync kmod
+
+    # ==================== 3. إعداد ccache ====================
+    - name: "⚡ إعداد ccache"
+      run: |
+        ccache -M 25G
+        echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> $GITHUB_ENV
+        echo "/usr/lib/ccache" >> $GITHUB_PATH
+
+    # ==================== 4. تحميل ZyCromerZ Clang ====================
+    - name: "🔧 تحميل ZyCromerZ Clang"
+      run: |
+        echo "🔧 تحميل ZyCromerZ Clang..."
+        mkdir -p ${{ env.CLANG_DIR }}
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz
+        tar -xzf Clang-22.0.0git-20250920.tar.gz -C ${{ env.CLANG_DIR }} --strip-components=1
+        echo "${{ env.CLANG_DIR }}/bin" >> $GITHUB_PATH
+
+    # ==================== 5. تحميل KernelSU Next Dev ====================
+    - name: "🧪 تحميل KernelSU Next Dev"
+      run: |
+        echo "🧪 تحميل KernelSU Next Dev..."
+        git clone --depth=1 https://github.com/tiann/KernelSU.git -b dev ${{ env.KERNELSU_DIR }}
+        
+        cd ${{ env.KERNELSU_DIR }}
+        KSU_COMMIT=$(git rev-parse --short HEAD)
+        echo "KSU_COMMIT=$KSU_COMMIT" >> $GITHUB_ENV
+
+    # ==================== 6. دمج KernelSU في النواة ====================
+    - name: "🔗 دمج KernelSU في النواة"
+      run: |
+        echo "🔗 دمج KernelSU في النواة..."
+        
+        # إنشاء مجلد kernelsu
+        mkdir -p drivers/kernelsu
+        
+        # نسخ KernelSU
+        cp -r ${{ env.KERNELSU_DIR }}/* drivers/kernelsu/
+        
+        # إضافة إلى Makefile
+        if ! grep -q "kernelsu" drivers/Makefile; then
+          echo "" >> drivers/Makefile
+          echo "# KernelSU Next Dev Integration" >> drivers/Makefile
+          echo "obj-y += kernelsu/" >> drivers/Makefile
+        fi
+        
+        # إضافة إلى Kconfig
+        if ! grep -q "kernelsu" drivers/Kconfig; then
+          echo "" >> drivers/Kconfig
+          echo "# KernelSU Next Dev" >> drivers/Kconfig
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+        fi
+        
+        echo "✅ تم دمج KernelSU بنجاح"
+
+    # ==================== 7. تطبيق إعدادات KernelSU ====================
+    - name: "⚙️ تطبيق إعدادات KernelSU"
+      run: |
+        echo "⚙️ تطبيق إعدادات KernelSU..."
+        mkdir -p ${{ env.OUTPUT_DIR }}
+        
+        # إنشاء config
+        make ARCH=${{ env.ARCH }} O=${{ env.OUTPUT_DIR }} ${{ env.CONFIG_FILE }}
+        
+        # تطبيق إعدادات KernelSU
+        echo "CONFIG_KSU=y" >> ${{ env.OUTPUT_DIR }}/.config
+        echo "CONFIG_KSU_DEBUG=n" >> ${{ env.OUTPUT_DIR }}/.config
+        echo "CONFIG_OVERLAY_FS=y" >> ${{ env.OUTPUT_DIR }}/.config
+        echo "CONFIG_KPROBES=y" >> ${{ env.OUTPUT_DIR }}/.config
+        echo "CONFIG_HAVE_KPROBES=y" >> ${{ env.OUTPUT_DIR }}/.config
+        echo "CONFIG_ANDROID=y" >> ${{ env.OUTPUT_DIR }}/.config
+        echo "CONFIG_ANDROID_BINDER_IPC=y" >> ${{ env.OUTPUT_DIR }}/.config
+        echo "CONFIG_ANDROID_BINDERFS=y" >> ${{ env.OUTPUT_DIR }}/.config
+        
+        # تحديث التكوين
+        make ARCH=${{ env.ARCH }} O=${{ env.OUTPUT_DIR }} olddefconfig
+        
+        echo "✅ تم تطبيق إعدادات KernelSU"
+
+    # ==================== 8. بناء النواة ====================
+    - name: "🔨 بناء النواة"
+      id: build_kernel
+      run: |
+        echo "🔨 بدء بناء النواة مع KernelSU..."
+        
+        CLANG_PATH="${{ env.CLANG_DIR }}/bin/clang"
+        
+        # تسجيل وقت البدء
+        echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
+        
+        # البناء
+        make -j$(nproc) \
+          O=${{ env.OUTPUT_DIR }} \
+          ARCH=${{ env.ARCH }} \
+          CC="ccache $CLANG_PATH" \
+          LD="${{ env.CLANG_DIR }}/bin/ld.lld" \
+          AR="${{ env.CLANG_DIR }}/bin/llvm-ar" \
+          NM="${{ env.CLANG_DIR }}/bin/llvm-nm" \
+          OBJCOPY="${{ env.CLANG_DIR }}/bin/llvm-objcopy" \
+          OBJDUMP="${{ env.CLANG_DIR }}/bin/llvm-objdump" \
+          STRIP="${{ env.CLANG_DIR }}/bin/llvm-strip" \
+          READELF="${{ env.CLANG_DIR }}/bin/llvm-readelf" \
+          CLANG_TRIPLE="aarch64-linux-gnu-" \
+          CROSS_COMPILE="${{ env.CLANG_DIR }}/bin/aarch64-linux-gnu-" \
+          HOSTCC="$CLANG_PATH" \
+          HOSTCXX="${{ env.CLANG_DIR }}/bin/clang++" \
+          HOSTAR="${{ env.CLANG_DIR }}/bin/llvm-ar" \
+          HOSTLD="${{ env.CLANG_DIR }}/bin/ld.lld" \
+          LLVM=1 \
+          LLVM_IAS=1
+        
+        # التحقق من النتيجة
+        if [ -f "${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image.gz" ]; then
+          echo "✅ البناء ناجح!"
+          echo "IMAGE_PATH=${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image.gz" >> $GITHUB_ENV
+          echo "build_status=success" >> $GITHUB_OUTPUT
+        elif [ -f "${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image" ]; then
+          echo "✅ البناء ناجح!"
+          echo "IMAGE_PATH=${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image" >> $GITHUB_ENV
+          echo "build_status=success" >> $GITHUB_OUTPUT
+        else
+          echo "❌ فشل البناء!"
+          echo "build_status=failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        # التحقق من dtbo
+        if [ -f "${{ env.OUTPUT_DIR }}/arch/arm64/boot/dtbo.img" ]; then
+          echo "DTBO_PATH=${{ env.OUTPUT_DIR }}/arch/arm64/boot/dtbo.img" >> $GITHUB_ENV
+        fi
+
+    # ==================== 9. إعداد AnyKernel3 ====================
+    - name: "📦 إعداد AnyKernel3"
+      if: steps.build_kernel.outputs.build_status == 'success'
+      run: |
+        echo "📦 تحميل AnyKernel3 من Joker-V2..."
+        rm -rf ${{ env.ANYKERNEL_DIR }}
+        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3.git -b sixteen ${{ env.ANYKERNEL_DIR }}
+        
+        # تنظيف الملفات القديمة
+        rm -f ${{ env.ANYKERNEL_DIR }}/Image.gz 2>/dev/null || true
+        rm -f ${{ env.ANYKERNEL_DIR }}/Image 2>/dev/null || true
+        rm -f ${{ env.ANYKERNEL_DIR }}/dtbo.img 2>/dev/null || true
+
+    # ==================== 10. نسخ الملفات ====================
+    - name: "📁 نسخ ملفات kernel"
+      if: steps.build_kernel.outputs.build_status == 'success'
+      run: |
+        echo "📁 نسخ ملفات kernel..."
+        
+        # نسخ kernel image
+        cp "${{ env.IMAGE_PATH }}" "${{ env.ANYKERNEL_DIR }}/"
+        echo "✅ تم نسخ kernel image"
+        
+        # نسخ dtbo.img إذا وجد
+        if [[ -n "${{ env.DTBO_PATH }}" && -f "${{ env.DTBO_PATH }}" ]]; then
+          cp "${{ env.DTBO_PATH }}" "${{ env.ANYKERNEL_DIR }}/dtbo.img"
+          echo "✅ تم نسخ dtbo.img"
+        fi
+
+    # ==================== 11. إنشاء ZIP ====================
+    - name: "🎯 إنشاء ملف ZIP"
+      if: steps.build_kernel.outputs.build_status == 'success'
+      run: |
+        echo "🎯 إنشاء ملف ZIP..."
+        
+        cd "${{ env.ANYKERNEL_DIR }}"
+        zip -r9 "../${{ env.ZIP_NAME }}" ./*
+        
+        echo "✅ تم إنشاء ZIP"
+
+    # ==================== 12. توقيع ZIP ====================
+    - name: "🔏 توقيع ZIP"
+      if: steps.build_kernel.outputs.build_status == 'success'
+      run: |
+        echo "🔏 توقيع ملف ZIP..."
+        
+        # تحميل ZipSigner
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar -O zipsigner.jar
+        
+        # توقيع ZIP
+        java -jar zipsigner.jar "${{ env.ZIP_NAME }}" "${{ env.SIGNED_ZIP_NAME }}"
+        
+        if [ -f "${{ env.SIGNED_ZIP_NAME }}" ]; then
+          echo "✅ تم توقيع ZIP"
+          
+          # حساب الوقت
+          END_TIME=$(date +%s)
+          BUILD_TIME=$((END_TIME - START_TIME))
+          BUILD_MINUTES=$((BUILD_TIME / 60))
+          BUILD_SECONDS=$((BUILD_TIME % 60))
+          
+          echo "BUILD_TIME=${BUILD_TIME}" >> $GITHUB_ENV
+          echo "BUILD_MINUTES=${BUILD_MINUTES}" >> $GITHUB_ENV
+          echo "BUILD_SECONDS=${BUILD_SECONDS}" >> $GITHUB_ENV
+        else
+          echo "⚠️ فشل التوقيع، استخدام ZIP غير موقع"
+          cp "${{ env.ZIP_NAME }}" "${{ env.SIGNED_ZIP_NAME }}"
+        fi
+
+    # ==================== 13. رفع النتائج ====================
+    - name: "📤 رفع الملفات الناتجة"
+      if: steps.build_kernel.outputs.build_status == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-${{ env.KERNEL_NAME }}-ksu-dev
+        path: |
+          ${{ env.SIGNED_ZIP_NAME }}
+          ${{ env.ZIP_NAME }}
+          ${{ env.OUTPUT_DIR }}/.config
+        retention-days: 7
+
+    # ==================== 14. عرض النتائج ====================
+    - name: "📊 عرض النتائج"
+      if: steps.build_kernel.outputs.build_status == 'success'
+      run: |
+        echo ""
+        echo "╔══════════════════════════════════════════════════════╗"
+        echo "║                🎊 البناء الناجح!                    ║"
+        echo "╠══════════════════════════════════════════════════════╣"
+        echo "║  Kernel: ${{ env.KERNEL_NAME }}"
+        echo "║  KernelSU: Next Dev (${{ env.KSU_COMMIT }})"
+        echo "║  Build Time: ${{ env.BUILD_MINUTES }}m ${{ env.BUILD_SECONDS }}s"
+        echo "╠══════════════════════════════════════════════════════╣"
+        echo "║  📁 الملفات المتاحة للتحميل:"
+        echo "║    • ${{ env.SIGNED_ZIP_NAME }} (مُوقَّع)"
+        echo "║    • ${{ env.ZIP_NAME }} (غير موقع)"
+        echo "║    • .config (إعدادات kernel)"
+        echo "╚══════════════════════════════════════════════════════╝"
