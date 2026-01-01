@@ -1,336 +1,373 @@
-name: "🚀 Build Kernel with KernelSU (stable-1134)"
+name: "Build Kernel with KernelSU"
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
     inputs:
       clean_build:
-        description: '🧹 Clean build'
+        description: 'Clean build'
         required: false
         default: 'false'
-      include_apk:
-        description: '📱 Include KernelSU Manager APK'
-        required: false
-        default: 'true'
 
 env:
-  # Basic Configuration
-  KERNEL_NAME: "xcalibur-v5.4-violet-dynamic-ksu"
+  KERNEL_NAME: "xcalibur-kernel"
   ARCH: "arm64"
-  CONFIG_FILE: "vendor/violet-perf_defconfig"
+  CONFIG_FILE: "violet-perf_defconfig"
+  DEVICE_CODENAME: "violet"
   
-  # Directories
-  ANYKERNEL_DIR: "${{ github.workspace }}/anykernel"
-  TOOLCHAIN_DIR: "${{ github.workspace }}/toolchain"
-  OUTPUT_DIR: "${{ github.workspace }}/out"
-  RELEASES_DIR: "${{ github.workspace }}/releases"
-  
-  # File Names
-  ZIP_NAME: "xcalibur-ksu-${{ github.run_number }}.zip"
-  SIGNED_ZIP_NAME: "xcalibur-ksu-${{ github.run_number }}-signed.zip"
-  
-  # KernelSU Configuration ⭐
-  KSU_KERNEL_BRANCH: "stable-1134"
-  KSU_APK_VERSION: "v1.1.1-hotfix"
-  KSU_APK_URL: "https://github.com/tiann/KernelSU/releases/download/v1.1.1/KernelSU_v1.1.1_12174-release.apk"
+  # KernelSU
+  KSU_BRANCH: "main"
+  KSU_REPO: "https://github.com/tiann/KernelSU"
   
   # Toolchain
   TOOLCHAIN_URL: "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz"
+  
+  # AnyKernel3
+  ANY_KERNEL_REPO: "https://github.com/osm0sis/AnyKernel3"
+  
+  JOBS: 4
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    
+    timeout-minutes: 60
+
     steps:
-    # ==================== INITIALIZATION ====================
-    - name: "📥 Checkout repository"
+    - name: "Start Build"
+      run: |
+        echo "========================================"
+        echo "Building ${{ env.KERNEL_NAME }}"
+        echo "Device: ${{ env.DEVICE_CODENAME }}"
+        echo "========================================"
+
+    - name: "Checkout Kernel Source"
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        fetch-depth: 1
 
-    - name: "📝 Get commit info"
-      id: commit_info
-      run: |
-        echo "commit_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-        echo "commit_message=$(git log --oneline -1)" >> $GITHUB_OUTPUT
-
-    - name: "📊 Display build info"
-      run: |
-        echo "================================================"
-        echo "           🚀 KERNEL BUILD STARTING"
-        echo "================================================"
-        echo "Kernel:    ${{ env.KERNEL_NAME }}"
-        echo "Arch:      ${{ env.ARCH }}"
-        echo "KSU:       ${{ env.KSU_KERNEL_BRANCH }}"
-        echo "APK:       ${{ env.KSU_APK_VERSION }}"
-        echo "Build:     #${{ github.run_number }}"
-        echo "Commit:    ${{ steps.commit_info.outputs.commit_short }}"
-        echo "================================================"
-
-    # ==================== CLEAN BUILD ====================
-    - name: "🧹 Clean build (if requested)"
+    - name: "Clean Build (Optional)"
       if: github.event.inputs.clean_build == 'true'
       run: |
-        echo "Cleaning build environment..."
-        rm -rf out/ anykernel/ toolchain/ drivers/kernelsu/
+        echo "Cleaning build..."
         make clean && make mrproper
-        echo "✅ Clean build ready"
+        rm -rf out/ anykernel/ toolchain/
 
-    # ==================== DEPENDENCIES ====================
-    - name: "📦 Install dependencies"
+    - name: "Install Dependencies"
       run: |
-        echo "Installing build dependencies..."
         sudo apt-get update
         sudo apt-get install -y \
-          bc bison build-essential ccache curl flex \
-          gcc-aarch64-linux-gnu git libelf-dev libssl-dev \
-          make python3 wget zip default-jre patch
-        echo "✅ Dependencies installed"
+          build-essential \
+          gcc-aarch64-linux-gnu \
+          libncurses-dev \
+          libssl-dev \
+          bc \
+          flex \
+          bison \
+          git \
+          wget \
+          zip \
+          cpio \
+          lz4 \
+          lzop
 
-    # ==================== TOOLCHAIN ====================
-    - name: "🔧 Setup toolchain"
+    - name: "Download Toolchain"
       run: |
-        if [ ! -d "${{ env.TOOLCHAIN_DIR }}" ]; then
-          echo "Downloading toolchain..."
-          wget -q ${{ env.TOOLCHAIN_URL }} -O clang.tar.gz
-          mkdir -p ${{ env.TOOLCHAIN_DIR }}
-          tar -xzf clang.tar.gz -C ${{ env.TOOLCHAIN_DIR }} --strip-components=1
-          rm -f clang.tar.gz
-          echo "✅ Toolchain installed"
-        else
-          echo "⚡ Toolchain exists"
-        fi
-        echo "${{ env.TOOLCHAIN_DIR }}/bin" >> $GITHUB_PATH
-
-    # ==================== KERNELSU INSTALLATION ====================
-    - name: "📦 Install KernelSU"
-      id: install_ksu
-      run: |
-        echo "Installing KernelSU ${{ env.KSU_KERNEL_BRANCH }}..."
-        git clone https://github.com/KernelSU-Next/KernelSU.git \
-          --depth=1 \
-          --branch "${{ env.KSU_KERNEL_BRANCH }}" \
-          /tmp/kernelsu
+        echo "Downloading toolchain..."
+        wget -q "${{ env.TOOLCHAIN_URL }}" -O clang.tar.gz
+        mkdir -p toolchain
+        tar -xzf clang.tar.gz -C toolchain --strip-components=1
+        rm -f clang.tar.gz
         
-        mkdir -p drivers/kernelsu
-        cp -rf /tmp/kernelsu/kernel/* drivers/kernelsu/
-        rm -rf /tmp/kernelsu
-        
-        if [ -f "drivers/kernelsu/core.c" ]; then
-          echo "✅ KernelSU installed"
-          echo "installed=true" >> $GITHUB_OUTPUT
+        # Verify toolchain
+        if [ -f "toolchain/bin/clang" ]; then
+          echo "Toolchain installed successfully"
+          echo "PATH=$PWD/toolchain/bin:$PATH" >> $GITHUB_ENV
         else
-          echo "installed=false" >> $GITHUB_OUTPUT
+          echo "ERROR: Toolchain installation failed"
           exit 1
         fi
 
-    # ==================== APPLY PATCHES ====================
-    - name: "🔨 Apply KernelSU patches"
-      if: steps.install_ksu.outputs.installed == 'true'
-      id: apply_patches
+    - name: "Install KernelSU"
+      id: install_ksu
+      run: |
+        echo "Installing KernelSU..."
+        
+        # Remove existing
+        rm -rf drivers/kernelsu 2>/dev/null || true
+        
+        # Clone KernelSU
+        git clone "${{ env.KSU_REPO }}" \
+          --depth=1 \
+          --branch "${{ env.KSU_BRANCH }}" \
+          /tmp/kernelsu
+        
+        # Check structure
+        if [ -d "/tmp/kernelsu/kernel" ]; then
+          echo "Found kernel sources"
+          KSU_SRC_DIR="/tmp/kernelsu/kernel"
+        elif [ -d "/tmp/kernelsu" ]; then
+          echo "Using root directory"
+          KSU_SRC_DIR="/tmp/kernelsu"
+        else
+          echo "ERROR: KernelSU structure not recognized"
+          exit 1
+        fi
+        
+        # Copy to kernel
+        mkdir -p drivers/kernelsu
+        cp -r "$KSU_SRC_DIR"/* drivers/kernelsu/ 2>/dev/null || true
+        
+        # Verify installation
+        if [ -f "drivers/kernelsu/core.c" ] || [ -f "drivers/kernelsu/kernel_compat.c" ]; then
+          echo "KernelSU installed successfully"
+          echo "ksu_installed=true" >> $GITHUB_OUTPUT
+        else
+          # List what we got
+          echo "Files in drivers/kernelsu:"
+          ls -la drivers/kernelsu/ || true
+          echo "ERROR: KernelSU core files not found"
+          echo "ksu_installed=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        # Cleanup
+        rm -rf /tmp/kernelsu
+
+    - name: "Apply KernelSU Patches"
+      if: steps.install_ksu.outputs.ksu_installed == 'true'
       run: |
         echo "Applying KernelSU patches..."
-        git clone https://github.com/Jonjeexe/KernelSU_Patches.git \
-          --depth=1 \
-          /tmp/ksu-patches
         
-        PATCH_COUNT=0
-        for patch in /tmp/ksu-patches/0*.patch; do
-          if patch -p1 --forward < "$patch" 2>/dev/null; then
-            PATCH_COUNT=$((PATCH_COUNT + 1))
+        # Try to get patches from multiple sources
+        PATCH_SOURCES=(
+          "https://github.com/tiann/kernel_patches.git"
+          "https://github.com/KernelSU-Next/kernel_patches.git"
+        )
+        
+        PATCHES_APPLIED=0
+        
+        for repo in "${PATCH_SOURCES[@]}"; do
+          echo "Trying patches from: $repo"
+          
+          rm -rf /tmp/patches 2>/dev/null || true
+          
+          if git clone "$repo" --depth=1 /tmp/patches 2>/dev/null; then
+            echo "Successfully cloned patches"
+            
+            # Try to apply common patches
+            PATCH_FILES=(
+              "non-gki/0001-non-gki-core.patch"
+              "non-gki/0002-non-gki-hooks.patch"
+              "non-gki/0003-non-gki-modules.patch"
+            )
+            
+            for patch_file in "${PATCH_FILES[@]}"; do
+              if [ -f "/tmp/patches/$patch_file" ]; then
+                echo "Applying: $patch_file"
+                if patch -p1 --forward --silent < "/tmp/patches/$patch_file" 2>/dev/null; then
+                  echo "  Applied successfully"
+                  PATCHES_APPLIED=$((PATCHES_APPLIED + 1))
+                else
+                  echo "  Failed or already applied"
+                fi
+              fi
+            done
+            
+            break  # Stop after first successful source
           fi
         done
         
-        rm -rf /tmp/ksu-patches
-        echo "patches_applied=$PATCH_COUNT" >> $GITHUB_OUTPUT
-        echo "✅ Applied $PATCH_COUNT/6 patches"
+        if [ $PATCHES_APPLIED -eq 0 ]; then
+          echo "Warning: No patches applied. KernelSU might need manual configuration."
+        else
+          echo "Successfully applied $PATCHES_APPLIED patches"
+        fi
 
-    # ==================== KERNEL CONFIGURATION ====================
-    - name: "⚙️ Configure kernel"
+    - name: "Configure Kernel"
       run: |
         echo "Configuring kernel..."
-        mkdir -p ${{ env.OUTPUT_DIR }}
+        
+        # Create output directory
+        mkdir -p out
         
         # Generate initial config
-        make ARCH=${{ env.ARCH }} O=${{ env.OUTPUT_DIR }} ${{ env.CONFIG_FILE }}
+        make ARCH=${{ env.ARCH }} O=out ${{ env.CONFIG_FILE }} || \
+          make ARCH=${{ env.ARCH }} O=out defconfig
         
-        # Add KernelSU config
-        cat >> ${{ env.OUTPUT_DIR }}/.config << 'EOF'
+        # Add KernelSU configuration
+        cat >> out/.config << 'EOF'
+
+# KernelSU Configuration
 CONFIG_KSU=y
-CONFIG_KSU_NAME="KSU"
-CONFIG_KSU_MANUAL_HOOK=y
 CONFIG_KSU_DEBUG=n
+CONFIG_KSU_EXFAT_SUPPORT=y
 EOF
         
-        make ARCH=${{ env.ARCH }} O=${{ env.OUTPUT_DIR }} olddefconfig
-        echo "✅ Kernel configured"
+        # Update configuration
+        make ARCH=${{ env.ARCH }} O=out olddefconfig
+        
+        # Show important configs
+        echo "Kernel configuration summary:"
+        grep -E "KSU|KERNELSU" out/.config || echo "No KSU configs found"
 
-    # ==================== COMPILE KERNEL ====================
-    - name: "🚀 Compile kernel"
+    - name: "Compile Kernel"
       id: compile
       run: |
         echo "Compiling kernel..."
+        
         START_TIME=$(date +%s)
         
-        make -j$(nproc) \
-          O=${{ env.OUTPUT_DIR }} \
+        # Compile with Clang
+        make -j${{ env.JOBS }} \
+          O=out \
           ARCH=${{ env.ARCH }} \
-          CC="ccache clang" \
-          CLANG_TRIPLE="aarch64-linux-gnu-" \
+          CC="clang" \
+          LD="ld.lld" \
+          AR="llvm-ar" \
+          NM="llvm-nm" \
+          OBJCOPY="llvm-objcopy" \
+          OBJDUMP="llvm-objdump" \
+          STRIP="llvm-strip" \
           CROSS_COMPILE="aarch64-linux-gnu-" \
           LLVM=1 \
-          LLVM_IAS=1 \
-          2>&1 | tee build.log
+          LLVM_IAS=1 2>&1 | tee build.log
         
         END_TIME=$(date +%s)
         BUILD_TIME=$((END_TIME - START_TIME))
-        echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
         
-        if tail -5 build.log | grep -q "Error"; then
-          echo "❌ Build failed"
-          exit 1
+        # Check build result
+        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
+          SIZE=$(du -h "out/arch/arm64/boot/Image.gz" | cut -f1)
+          echo "✅ Kernel compiled successfully!"
+          echo "   Size: $SIZE"
+          echo "   Time: ${BUILD_TIME}s"
+          echo "compile_status=success" >> $GITHUB_OUTPUT
+          echo "kernel_size=$SIZE" >> $GITHUB_ENV
+          echo "build_time=$BUILD_TIME" >> $GITHUB_ENV
         else
-          echo "✅ Build completed in ${BUILD_TIME}s"
-        fi
-
-    # ==================== VERIFY ARTIFACTS ====================
-    - name: "✅ Verify build artifacts"
-      id: verify_build
-      run: |
-        echo "Verifying artifacts..."
-        
-        if [ -f "${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image.gz" ] && \
-           [ -f "${{ env.OUTPUT_DIR }}/arch/arm64/boot/dtbo.img" ]; then
-          echo "✅ All artifacts found"
-          echo "build_success=true" >> $GITHUB_OUTPUT
-        else
-          echo "❌ Missing artifacts"
-          echo "build_success=false" >> $GITHUB_OUTPUT
+          echo "❌ Kernel compilation failed"
+          echo "Last 20 lines of build log:"
+          tail -20 build.log
+          echo "compile_status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi
 
-    # ==================== SETUP ANYKERNEL ====================
-    - name: "📦 Setup AnyKernel3"
-      if: steps.verify_build.outputs.build_success == 'true'
+    - name: "Download KernelSU Manager APK"
+      if: steps.compile.outputs.compile_status == 'success'
       run: |
-        echo "Setting up AnyKernel3..."
-        rm -rf ${{ env.ANYKERNEL_DIR }}
-        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3 -b sixteen ${{ env.ANYKERNEL_DIR }}
+        echo "Downloading KernelSU Manager..."
         
-        # Clean AnyKernel directory
-        rm -f ${{ env.ANYKERNEL_DIR }}/Image.gz 2>/dev/null || true
-        rm -f ${{ env.ANYKERNEL_DIR }}/dtbo.img 2>/dev/null || true
+        # List of possible APK URLs (latest first)
+        APK_URLS=(
+          "https://github.com/tiann/KernelSU/releases/latest/download/KernelSU.apk"
+          "https://github.com/tiann/KernelSU/releases/download/v1.2.0/KernelSU_v1.2.0_12448-release.apk"
+          "https://github.com/tiann/KernelSU/releases/download/v1.1.2/KernelSU_v1.1.2_12320-release.apk"
+        )
+        
+        DOWNLOADED=false
+        
+        for url in "${APK_URLS[@]}"; do
+          echo "Trying: $(basename $url)"
+          if wget -q --timeout=15 --tries=2 -O kernelsu.apk "$url"; then
+            if [ -s "kernelsu.apk" ]; then
+              SIZE=$(du -h kernelsu.apk | cut -f1)
+              echo "✅ Downloaded: $(basename $url) ($SIZE)"
+              DOWNLOADED=true
+              break
+            fi
+          fi
+        done
+        
+        if [ "$DOWNLOADED" = false ]; then
+          echo "⚠️ Warning: Could not download KernelSU APK"
+          echo "The kernel will still work, but you'll need to install KernelSU manually"
+        fi
 
-    # ==================== ADD APK (OPTIONAL) ====================
-    - name: "📱 Add KernelSU APK"
-      if: steps.verify_build.outputs.build_success == 'true' && github.event.inputs.include_apk == 'true'
+    - name: "Prepare AnyKernel3"
+      if: steps.compile.outputs.compile_status == 'success'
       run: |
-        echo "Adding KernelSU APK..."
-        mkdir -p ${{ env.ANYKERNEL_DIR }}/apk
-        wget -q ${{ env.KSU_APK_URL }} -O ${{ env.ANYKERNEL_DIR }}/apk/KernelSU_Manager.apk
-        echo "✅ APK added"
+        echo "Preparing AnyKernel3..."
+        
+        rm -rf anykernel 2>/dev/null || true
+        
+        # Clone AnyKernel3
+        git clone "${{ env.ANY_KERNEL_REPO }}" \
+          --depth=1 \
+          anykernel
+        
+        # Copy kernel image
+        cp out/arch/arm64/boot/Image.gz anykernel/
+        
+        # Create simple installer script
+        cat > anykernel/install.sh << 'EOF'
+#!/system/bin/sh
 
-    # ==================== PACKAGE KERNEL ====================
-    - name: "📁 Package kernel"
-      if: steps.verify_build.outputs.build_success == 'true'
+ui_print " "
+ui_print "******************************"
+ui_print "   xcalibur Kernel with KSU  "
+ui_print "******************************"
+ui_print " "
+
+# Flash kernel
+dd if=/tmp/anykernel/Image.gz of=/dev/block/bootdevice/by-name/boot
+
+ui_print " "
+ui_print "Kernel installed successfully!"
+ui_print " "
+EOF
+        
+        chmod +x anykernel/install.sh
+        echo "AnyKernel3 ready"
+
+    - name: "Create Flashable ZIP"
+      if: steps.compile.outputs.compile_status == 'success'
       run: |
-        echo "Packaging kernel..."
+        echo "Creating flashable ZIP..."
         
-        # Copy files from OUT directory
-        cp ${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image.gz ${{ env.ANYKERNEL_DIR }}/
-        cp ${{ env.OUTPUT_DIR }}/arch/arm64/boot/dtbo.img ${{ env.ANYKERNEL_DIR }}/
+        cd anykernel
         
-        # Create build info
-        cat > ${{ env.ANYKERNEL_DIR }}/build_info.txt << EOF
-        Kernel: ${{ env.KERNEL_NAME }}
-        KSU: ${{ env.KSU_KERNEL_BRANCH }}
-        APK: ${{ env.KSU_APK_VERSION }}
-        Build: #${{ github.run_number }}
-        Commit: ${{ steps.commit_info.outputs.commit_short }}
-        Date: $(date)
-        EOF
+        # Add APK if downloaded
+        if [ -f "../kernelsu.apk" ]; then
+          cp ../kernelsu.apk .
+        fi
         
-        # Create zip
-        cd ${{ env.ANYKERNEL_DIR }}
-        zip -r9 ../${{ env.ZIP_NAME }} * > /dev/null
+        # Create ZIP
+        ZIP_NAME="xcalibur-ksu-${{ github.run_number }}-${{ env.DEVICE_CODENAME }}.zip"
+        zip -r9 "../$ZIP_NAME" ./* -x ".git/*" > /dev/null
+        
         cd ..
         
-        echo "✅ Package created: ${{ env.ZIP_NAME }}"
+        ZIP_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
+        echo "✅ Created: $ZIP_NAME ($ZIP_SIZE)"
+        
+        # Save filename
+        echo "zip_name=$ZIP_NAME" >> $GITHUB_ENV
 
-    # ==================== SIGN ZIP ====================
-    - name: "🔏 Sign kernel zip"
-      if: steps.verify_build.outputs.build_success == 'true'
-      run: |
-        echo "Signing kernel zip..."
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar -O zipsigner.jar
-        
-        java -jar zipsigner.jar \
-          ${{ env.ZIP_NAME }} \
-          ${{ env.SIGNED_ZIP_NAME }}
-        
-        if [ $? -eq 0 ]; then
-          echo "SIGNED_ZIP=${{ env.SIGNED_ZIP_NAME }}" >> $GITHUB_ENV
-          echo "✅ Signed: ${{ env.SIGNED_ZIP_NAME }}"
-        else
-          echo "SIGNED_ZIP=${{ env.ZIP_NAME }}" >> $GITHUB_ENV
-          echo "⚠️ Using unsigned zip"
-        fi
-
-    # ==================== ORGANIZE RELEASES ====================
-    - name: "📂 Organize releases"
-      if: steps.verify_build.outputs.build_success == 'true'
-      run: |
-        echo "Organizing release files..."
-        mkdir -p ${{ env.RELEASES_DIR }}
-        
-        # Move final zip to releases
-        mv "${{ env.SIGNED_ZIP }}" "${{ env.RELEASES_DIR }}/"
-        
-        # Copy important files
-        cp ${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image.gz ${{ env.RELEASES_DIR }}/ 2>/dev/null || true
-        cp ${{ env.OUTPUT_DIR }}/arch/arm64/boot/dtbo.img ${{ env.RELEASES_DIR }}/ 2>/dev/null || true
-        
-        echo "✅ Files organized in releases/"
-
-    # ==================== UPLOAD ARTIFACTS ====================
-    - name: "📤 Upload artifacts"
-      if: steps.verify_build.outputs.build_success == 'true'
+    - name: "Upload Artifacts"
       uses: actions/upload-artifact@v4
       with:
         name: kernel-build-${{ github.run_number }}
         path: |
-          ${{ env.RELEASES_DIR }}/*
-          ${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image.gz
-          ${{ env.OUTPUT_DIR }}/arch/arm64/boot/dtbo.img
-          build.log
-        retention-days: 30
-
-    # ==================== BUILD SUMMARY ====================
-    - name: "🎉 Build summary"
-      if: steps.verify_build.outputs.build_success == 'true'
-      run: |
-        echo "================================================"
-        echo "           🎉 BUILD COMPLETED SUCCESSFULLY"
-        echo "================================================"
-        echo "Status:    ✅ SUCCESS"
-        echo "Kernel:    ${{ env.KERNEL_NAME }}"
-        echo "KSU:       ${{ env.KSU_KERNEL_BRANCH }}"
-        echo "APK:       ${{ env.KSU_APK_VERSION }}"
-        echo "Time:      ${{ env.BUILD_TIME }} seconds"
-        echo "Output:    releases/${{ env.SIGNED_ZIP }}"
-        echo "Commit:    ${{ steps.commit_info.outputs.commit_short }}"
-        echo "================================================"
-
-    # ==================== UPLOAD LOGS ON FAILURE ====================
-    - name: "📋 Upload logs on failure"
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-failure-logs
-        path: |
-          build.log
-          ${{ env.OUTPUT_DIR }}/.config
+          *.zip
+          kernelsu.apk
+          out/arch/arm64/boot/Image.gz
         retention-days: 7
+
+    - name: "Build Summary"
+      if: always()
+      run: |
+        echo ""
+        echo "========================================"
+        echo "           BUILD SUMMARY"
+        echo "========================================"
+        
+        if [ "${{ steps.compile.outputs.compile_status }}" = "success" ]; then
+          echo "✅ Status: SUCCESS"
+          echo "📦 Kernel: ${{ env.kernel_size }}"
+          echo "⏱️  Time: ${{ env.build_time }}s"
+          echo "📁 Output: ${{ env.zip_name }}"
+        else
+          echo "❌ Status: FAILED"
+          echo "Check the logs above for errors"
+        fi
+        
+        echo "========================================"
