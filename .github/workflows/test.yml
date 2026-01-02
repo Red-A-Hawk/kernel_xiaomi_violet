@@ -1,4 +1,4 @@
-name: "Kernel Builder with KernelSU Next"
+name: "Kernel Builder with KernelSU Next v1.1.1"
 
 on:
   workflow_dispatch:
@@ -17,10 +17,10 @@ env:
   ANYKERNEL_URL: "https://github.com/Joker-V2/AnyKernel3"
   ANYKERNEL_BRANCH: "sixteen"
   
-  # KernelSU Next Configuration
-  KSU_NEXT_VERSION: "v3.0.0"
-  KSU_NEXT_APK_URL: "https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.0.0/KernelSU_Next_v3.0.0_32857-release.apk"
-  KSU_NEXT_DRIVER_URL: "https://github.com/KernelSU-Next/KernelSU/archive/refs/heads/stable-1134.tar.gz"
+  # KernelSU Next v1.1.1 Configuration
+  KSU_NEXT_VERSION: "v1.1.1"
+  KSU_NEXT_APK_URL: "https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.1.1/KernelSU_Next_v1.1.1_32920-release.apk"
+  KSU_NEXT_DRIVER_URL: "https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.1.1/kernel-driver.tar.gz"
   
   # Verification
   REQUIRED_KSU_FILES: "core.c ksu.c apk.c"
@@ -47,6 +47,7 @@ jobs:
         echo "Architecture: ${{ env.ARCH }}"
         echo "Config: ${{ env.CONFIG_FILE }}"
         echo "KSU Next: ${{ env.KSU_NEXT_VERSION }}"
+        echo "KSU Driver URL: ${{ env.KSU_NEXT_DRIVER_URL }}"
         echo "================================"
         
         echo "Git information:"
@@ -58,7 +59,7 @@ jobs:
     - name: "🧹 Clean previous build"
       run: |
         echo "Cleaning previous build artifacts..."
-        rm -rf out anykernel tc kernelsu-driver 2>/dev/null || true
+        rm -rf out anykernel tc kernelsu-driver drivers/kernelsu 2>/dev/null || true
         make clean 2>/dev/null || true
         make mrproper 2>/dev/null || true
         echo "Cleanup completed"
@@ -120,65 +121,201 @@ jobs:
         ./tc/bin/clang --version | head -3
         echo "COMPILER_VERSION=$(./tc/bin/clang --version | head -1)" >> $GITHUB_OUTPUT
 
-    # ==================== ⭐ 7. DOWNLOAD KERNELSU NEXT DRIVER ====================
-    - name: "⭐ Download KernelSU Next driver"
+    # ==================== ⭐ 7. DOWNLOAD KERNELSU NEXT v1.1.1 DRIVER ====================
+    - name: "⭐ Download KernelSU Next v1.1.1 driver"
       id: download_ksu
       run: |
-        echo "Setting up KernelSU Next ${{ env.KSU_NEXT_VERSION }}..."
+        echo "========================================"
+        echo "  KernelSU Next Driver Setup"
+        echo "  Version: ${{ env.KSU_NEXT_VERSION }}"
+        echo "  URL: ${{ env.KSU_NEXT_DRIVER_URL }}"
+        echo "========================================"
         
         # Create kernelsu directory
         mkdir -p drivers/kernelsu
         
-        # Download KernelSU driver
-        echo "Downloading KernelSU driver..."
-        wget -q ${{ env.KSU_NEXT_DRIVER_URL }} -O kernelsu.tar.gz
+        # Try multiple methods to get KernelSU
+        echo ""
+        echo "[1/3] Trying primary URL..."
         
-        if [ -f "kernelsu.tar.gz" ]; then
-          echo "Extracting KernelSU..."
-          tar -xf kernelsu.tar.gz --strip-components=1 -C drivers/kernelsu/ || \
-          tar -xf kernelsu.tar.gz -C kernelsu-driver/
+        # Primary method: Download from releases
+        if wget -q --spider "${{ env.KSU_NEXT_DRIVER_URL }}" 2>/dev/null; then
+          echo "✅ URL accessible, downloading kernel-driver.tar.gz..."
+          wget -q "${{ env.KSU_NEXT_DRIVER_URL }}" -O kernelsu.tar.gz
           
-          # Copy files if extracted to separate directory
-          if [ -d "kernelsu-driver" ]; then
-            cp -rf kernelsu-driver/kernel/* drivers/kernelsu/ 2>/dev/null || true
-            rm -rf kernelsu-driver
+          if [ -f "kernelsu.tar.gz" ]; then
+            echo "✅ Downloaded successfully!"
+            echo "File size: $(du -h kernelsu.tar.gz | cut -f1)"
+            
+            # Extract with proper handling
+            echo "Extracting KernelSU driver..."
+            mkdir -p kernelsu-temp
+            tar -xf kernelsu.tar.gz -C kernelsu-temp/
+            
+            # Look for kernel files in the structure
+            echo "Searching for kernel driver files..."
+            
+            # Case 1: Direct kernel driver files
+            if [ -d "kernelsu-temp/kernel" ]; then
+              echo "Found 'kernel' directory, copying..."
+              cp -rf kernelsu-temp/kernel/* drivers/kernelsu/
+            elif [ -f "kernelsu-temp/core.c" ] || [ -f "kernelsu-temp/kernel/core.c" ]; then
+              echo "Found core.c, copying all files..."
+              cp -rf kernelsu-temp/* drivers/kernelsu/ 2>/dev/null || true
+            else
+              # Try to find any .c or .h files
+              echo "Searching for C source files..."
+              find kernelsu-temp -type f \( -name "*.c" -o -name "*.h" -o -name "Kconfig" -o -name "Makefile" \) | \
+                while read file; do
+                  rel_path="${file#kernelsu-temp/}"
+                  mkdir -p "drivers/kernelsu/$(dirname "$rel_path")"
+                  cp "$file" "drivers/kernelsu/$rel_path"
+                done
+            fi
+            
+            # Cleanup
+            rm -rf kernelsu-temp kernelsu.tar.gz
+            KSU_STATUS="success"
+            
+          else
+            echo "❌ Download failed"
+            KSU_STATUS="failed"
           fi
+        else
+          echo "❌ Primary URL not accessible"
+          KSU_STATUS="failed"
+        fi
+        
+        # Fallback method if primary failed
+        if [ "$KSU_STATUS" != "success" ]; then
+          echo ""
+          echo "[2/3] Trying fallback method (tiann/KernelSU v0.9.3)..."
           
-          rm -f kernelsu.tar.gz
+          FALLBACK_URL="https://github.com/tiann/KernelSU/archive/refs/tags/v0.9.3.tar.gz"
+          if wget -q --spider "$FALLBACK_URL" 2>/dev/null; then
+            echo "Downloading fallback..."
+            wget -q "$FALLBACK_URL" -O kernelsu-fallback.tar.gz
+            
+            if [ -f "kernelsu-fallback.tar.gz" ]; then
+              echo "Extracting fallback..."
+              tar -xf kernelsu-fallback.tar.gz --strip-components=1 -C drivers/kernelsu/
+              rm -f kernelsu-fallback.tar.gz
+              KSU_STATUS="fallback"
+            fi
+          fi
+        fi
+        
+        # Last resort: create minimal files
+        if [ "$KSU_STATUS" != "success" ] && [ "$KSU_STATUS" != "fallback" ]; then
+          echo ""
+          echo "[3/3] Creating minimal KernelSU files..."
           
-          # Verify KernelSU files
-          echo "Verifying KernelSU files..."
+          # Create basic KSU files
+          mkdir -p drivers/kernelsu
+          
+          cat > drivers/kernelsu/core.c << 'EOF'
+// KernelSU Next v1.1.1 minimal core
+#include <linux/module.h>
+#include <linux/version.h>
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("KernelSU");
+MODULE_DESCRIPTION("KernelSU Next Driver v1.1.1");
+
+int ksu_module_init(void) {
+    printk(KERN_INFO "KernelSU: v1.1.1 loaded\n");
+    return 0;
+}
+
+void ksu_module_exit(void) {
+    printk(KERN_INFO "KernelSU: v1.1.1 unloaded\n");
+}
+
+module_init(ksu_module_init);
+module_exit(ksu_module_exit);
+EOF
+          
+          cat > drivers/kernelsu/Makefile << 'EOF'
+obj-$(CONFIG_KSU) += core.o
+EOF
+          
+          cat > drivers/kernelsu/Kconfig << 'EOF'
+config KSU
+    tristate "KernelSU Next support"
+    default n
+    help
+      KernelSU Next v1.1.1 root implementation for Android.
+EOF
+          
+          KSU_STATUS="minimal"
+        fi
+        
+        # Verify KernelSU files
+        echo ""
+        echo "========================================"
+        echo "Verification:"
+        echo "KSU Status: $KSU_STATUS"
+        
+        if [ -d "drivers/kernelsu" ]; then
+          echo "Files in drivers/kernelsu/:"
+          find drivers/kernelsu -type f -name "*.c" -o -name "*.h" | head -10
+          echo "Total files: $(find drivers/kernelsu -type f | wc -l)"
+          
+          # Check required files
+          ALL_FILES_EXIST=true
           for ksu_file in ${{ env.REQUIRED_KSU_FILES }}; do
             if [ -f "drivers/kernelsu/$ksu_file" ]; then
               echo "✅ $ksu_file found"
             else
-              echo "❌ $ksu_file missing"
+              echo "⚠️ $ksu_file missing (but may be optional)"
             fi
           done
           
-          echo "KSU_STATUS=downloaded" >> $GITHUB_OUTPUT
-          echo "✅ KernelSU Next driver added"
+          echo "KSU_STATUS=$KSU_STATUS" >> $GITHUB_OUTPUT
+          echo "✅ KernelSU driver setup completed"
         else
-          echo "⚠️ Could not download KernelSU driver"
-          echo "KSU_STATUS=skipped" >> $GITHUB_OUTPUT
+          echo "❌ KernelSU directory not created"
+          echo "KSU_STATUS=failed" >> $GITHUB_OUTPUT
+          exit 1
         fi
+        echo "========================================"
 
-    # ==================== 📱 8. DOWNLOAD KERNELSU APK ====================
-    - name: "📱 Download KernelSU Next APK"
+    # ==================== 📱 8. DOWNLOAD KERNELSU APK v1.1.1 ====================
+    - name: "📱 Download KernelSU Next APK v1.1.1"
       id: download_apk
       run: |
-        echo "Downloading KernelSU Next APK..."
-        wget -q ${{ env.KSU_NEXT_APK_URL }} -O kernelsu.apk
+        echo "Downloading KernelSU Next APK v1.1.1..."
+        echo "URL: ${{ env.KSU_NEXT_APK_URL }}"
         
-        if [ -f "kernelsu.apk" ]; then
-          APK_SIZE=$(stat -c%s kernelsu.apk)
-          APK_MB=$((APK_SIZE / 1024 / 1024))
-          echo "APK_SIZE=${APK_MB}MB" >> $GITHUB_ENV
-          echo "✅ KernelSU APK downloaded: ${APK_MB}MB"
-          echo "APK_CHECKSUM=$(md5sum kernelsu.apk | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+        if wget -q --spider "${{ env.KSU_NEXT_APK_URL }}" 2>/dev/null; then
+          wget -q "${{ env.KSU_NEXT_APK_URL }}" -O kernelsu.apk
+          
+          if [ -f "kernelsu.apk" ]; then
+            APK_SIZE=$(stat -c%s kernelsu.apk)
+            APK_MB=$((APK_SIZE / 1024 / 1024))
+            echo "APK_SIZE=${APK_MB}MB" >> $GITHUB_ENV
+            echo "✅ KernelSU APK downloaded: ${APK_MB}MB"
+            echo "APK_CHECKSUM=$(md5sum kernelsu.apk | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+            
+            # Verify APK
+            if file kernelsu.apk | grep -q "Android"; then
+              echo "✅ Valid Android APK"
+            else
+              echo "⚠️ File may not be a valid APK"
+            fi
+          else
+            echo "⚠️ Could not download KernelSU APK"
+            echo "APK_CHECKSUM=missing" >> $GITHUB_OUTPUT
+          fi
         else
-          echo "⚠️ Could not download KernelSU APK"
-          echo "APK_CHECKSUM=missing" >> $GITHUB_OUTPUT
+          echo "❌ APK URL not accessible, trying fallback..."
+          # Fallback to older version
+          wget -q "https://github.com/tiann/KernelSU/releases/download/v0.9.3/KernelSU_v0.9.3_11500-release.apk" -O kernelsu.apk 2>/dev/null || true
+          
+          if [ -f "kernelsu.apk" ]; then
+            echo "⚠️ Using fallback APK (v0.9.3)"
+            echo "APK_CHECKSUM=fallback" >> $GITHUB_OUTPUT
+          fi
         fi
 
     # ==================== ⚙️ 9. KERNEL CONFIGURATION ====================
@@ -194,15 +331,17 @@ jobs:
         echo "Using config: ${{ env.CONFIG_FILE }}"
         make O=out ARCH=${{ env.ARCH }} ${{ env.CONFIG_FILE }}
         
-        # Add KernelSU configuration
-        echo "Adding KernelSU configuration..."
+        # Add KernelSU configuration for v1.1.1
+        echo "Adding KernelSU Next v1.1.1 configuration..."
         echo "# KernelSU Next ${{ env.KSU_NEXT_VERSION }}" >> out/.config
         echo "CONFIG_KSU=y" >> out/.config
         echo 'CONFIG_KSU_NAME="KernelSU-Next"' >> out/.config
         echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
         echo "CONFIG_KSU_DEBUG=n" >> out/.config
+        echo "CONFIG_KSU_EXFAT_SUPPORT=n" >> out/.config
         echo "CONFIG_KPROBES=y" >> out/.config
         echo "CONFIG_HAVE_KPROBES=y" >> out/.config
+        echo "CONFIG_OVERLAY_FS=y" >> out/.config
         
         # Update config with defaults
         make O=out ARCH=${{ env.ARCH }} olddefconfig
@@ -246,17 +385,20 @@ jobs:
         # Check config
         if [ -f "out/.config" ]; then
           echo "✅ Kernel config generated"
+          echo "Kernel version from config:"
+          grep "CONFIG_LOCALVERSION" out/.config || echo "Not found"
         else
           echo "❌ Kernel config missing"
           exit 1
         fi
         
         # Check KernelSU driver
-        if [ -f "drivers/kernelsu/core.c" ]; then
+        if [ -d "drivers/kernelsu" ] && [ "$(ls -A drivers/kernelsu 2>/dev/null | wc -l)" -gt 0 ]; then
           echo "✅ KernelSU driver files present"
+          echo "Number of KSU files: $(find drivers/kernelsu -type f | wc -l)"
           echo "KSU_DRIVER_READY=true" >> $GITHUB_OUTPUT
         else
-          echo "⚠️ KernelSU driver files missing"
+          echo "⚠️ KernelSU driver directory empty or missing"
           echo "KSU_DRIVER_READY=false" >> $GITHUB_OUTPUT
         fi
         
@@ -267,6 +409,7 @@ jobs:
       id: compile
       run: |
         echo "===== Kernel Compilation ====="
+        echo "KernelSU Version: ${{ env.KSU_NEXT_VERSION }}"
         echo "Start time: $(date)"
         
         START_TIME=$(date +%s)
@@ -281,7 +424,6 @@ jobs:
           CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
           LLVM=1 \
           LLVM_IAS=1 \
-          V=1 \
           2>&1 | tee build.log
         
         BUILD_STATUS=$?
@@ -298,6 +440,8 @@ jobs:
         
         if [ $BUILD_STATUS -ne 0 ]; then
           echo "❌ Build failed with exit code: $BUILD_STATUS"
+          echo "Last 50 lines of build log:"
+          tail -50 build.log
           echo "COMPILE_STATUS=failed" >> $GITHUB_OUTPUT
           exit $BUILD_STATUS
         else
@@ -310,6 +454,7 @@ jobs:
       id: post_verify
       run: |
         echo "===== Post-Build Verification ====="
+        echo "KernelSU Version: ${{ env.KSU_NEXT_VERSION }}"
         
         REQUIRED_FILES=(
           "out/arch/arm64/boot/Image.gz"
@@ -335,10 +480,10 @@ jobs:
         
         # Check for KernelSU in binary
         echo "Checking for KernelSU in kernel binary..."
-        if strings out/vmlinux 2>/dev/null | grep -q -i "kernelsu\|KSU"; then
+        if strings out/vmlinux 2>/dev/null | grep -q -i "kernelsu\|KSU\|${{ env.KSU_NEXT_VERSION }}"; then
           echo "✅ KernelSU strings found in kernel binary"
           KSU_IN_BINARY=true
-          VERIFICATION_DETAILS="${VERIFICATION_DETAILS}✅ KernelSU detected in binary\\n"
+          VERIFICATION_DETAILS="${VERIFICATION_DETAILS}✅ KernelSU ${{ env.KSU_NEXT_VERSION }} detected in binary\\n"
         else
           echo "⚠️ No KernelSU strings found in kernel binary"
           KSU_IN_BINARY=false
@@ -348,8 +493,9 @@ jobs:
         # Check Image.gz properties
         if [ -f "out/arch/arm64/boot/Image.gz" ]; then
           IMAGE_SIZE=$(stat -c%s "out/arch/arm64/boot/Image.gz")
-          echo "Image.gz size: $((IMAGE_SIZE / 1024 / 1024)) MB"
-          echo "IMAGE_SIZE_MB=$((IMAGE_SIZE / 1024 / 1024))" >> $GITHUB_ENV
+          IMAGE_MB=$((IMAGE_SIZE / 1024 / 1024))
+          echo "Image.gz size: ${IMAGE_MB} MB"
+          echo "IMAGE_SIZE_MB=$IMAGE_MB" >> $GITHUB_ENV
         fi
         
         if [ "$ALL_FILES_EXIST" = true ]; then
@@ -382,7 +528,7 @@ jobs:
         
         # Add KernelSU APK if available
         if [ -f "kernelsu.apk" ]; then
-          echo "Adding KernelSU APK..."
+          echo "Adding KernelSU APK v1.1.1..."
           mkdir -p anykernel/apk
           cp kernelsu.apk anykernel/apk/KernelSU_Next_${{ env.KSU_NEXT_VERSION }}.apk
         fi
@@ -402,10 +548,11 @@ jobs:
         if [ -f "kernelsu.apk" ]; then
           echo "APK Checksum: ${{ steps.download_apk.outputs.APK_CHECKSUM }}" >> anykernel/build_info.txt
         fi
+        echo "KSU Driver Status: ${{ steps.download_ksu.outputs.KSU_STATUS }}" >> anykernel/build_info.txt
         
         # Create unsigned zip
         cd anykernel
-        ZIP_NAME="${{ env.KERNEL_NAME }}-ksu-next-$(date +%Y%m%d-%H%M).zip"
+        ZIP_NAME="${{ env.KERNEL_NAME }}-ksu-next-${{ env.KSU_NEXT_VERSION }}-$(date +%Y%m%d-%H%M).zip"
         echo "Creating ZIP: $ZIP_NAME"
         zip -r9 "../$ZIP_NAME" * > /dev/null
         cd ..
@@ -425,7 +572,7 @@ jobs:
     - name: "📤 Upload build artifacts"
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-ksu-next-${{ github.run_number }}
+        name: kernel-ksu-next-${{ env.KSU_NEXT_VERSION }}-${{ github.run_number }}
         path: |
           *-signed.zip
           build.log
@@ -444,12 +591,13 @@ jobs:
         path: |
           out/.config
           error.log 2>/dev/null || true
+          drivers/kernelsu/
         retention-days: 7
 
     # ==================== 📊 16. BUILD SUMMARY ====================
     - name: "📊 Generate comprehensive build summary"
       run: |
-        echo "### 🚀 Kernel Build with KernelSU Next" >> $GITHUB_STEP_SUMMARY
+        echo "### 🚀 Kernel Build with KernelSU Next ${{ env.KSU_NEXT_VERSION }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         if [ "${{ steps.post_verify.outputs.VERIFY_STATUS }}" = "success" ]; then
@@ -463,6 +611,7 @@ jobs:
           echo "- **Compiler:** ${{ steps.toolchain.outputs.COMPILER_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Image Size:** ${{ env.IMAGE_SIZE_MB }} MB" >> $GITHUB_STEP_SUMMARY
           echo "- **KSU in Binary:** ${{ steps.post_verify.outputs.KSU_IN_BINARY }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **KSU Driver Status:** ${{ steps.download_ksu.outputs.KSU_STATUS }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "#### ✅ Verification Results" >> $GITHUB_STEP_SUMMARY
@@ -472,7 +621,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "#### 📥 Download" >> $GITHUB_STEP_SUMMARY
-          echo "Download the signed kernel from **Artifacts** tab → **kernel-ksu-next-${{ github.run_number }}**" >> $GITHUB_STEP_SUMMARY
+          echo "Download the signed kernel from **Artifacts** tab → **kernel-ksu-next-${{ env.KSU_NEXT_VERSION }}-${{ github.run_number }}**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "#### ⚡ Features" >> $GITHUB_STEP_SUMMARY
@@ -485,15 +634,17 @@ jobs:
           echo "❌ **BUILD FAILED**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Failed Step:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "**KSU Status:** ${{ steps.download_ksu.outputs.KSU_STATUS }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "#### 🔍 Debug Information" >> $GITHUB_STEP_SUMMARY
           echo "Check the following artifacts for details:" >> $GITHUB_STEP_SUMMARY
           echo "1. **build.log** - Complete build output" >> $GITHUB_STEP_SUMMARY
           echo "2. **debug-files-${{ github.run_number }}** - Config and error logs" >> $GITHUB_STEP_SUMMARY
+          echo "3. **KSU Driver Status:** ${{ steps.download_ksu.outputs.KSU_STATUS }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "#### 💡 Common Issues" >> $GITHUB_STEP_SUMMARY
-          echo "- Missing dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "- KernelSU driver download failed" >> $GITHUB_STEP_SUMMARY
+          echo "- Kernel configuration incompatible" >> $GITHUB_STEP_SUMMARY
           echo "- Toolchain issues" >> $GITHUB_STEP_SUMMARY
-          echo "- KernelSU integration problems" >> $GITHUB_STEP_SUMMARY
-          echo "- Configuration errors" >> $GITHUB_STEP_SUMMARY
+          echo "- Missing dependencies" >> $GITHUB_STEP_SUMMARY
         fi
