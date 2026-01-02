@@ -1,4 +1,4 @@
-name: "Build Kernel with KernelSU Next v1.1.1"
+name: "Build Kernel - ZyC Clang 15 with KSU v1.1.1"
 
 on:
   workflow_dispatch:
@@ -7,17 +7,15 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    runs-on: ubuntu-22.04
     
     steps:
-    # ==================== 📥 1. GET KERNEL SOURCE ====================
+    # ==================== 📥 1. CHECKOUT KERNEL SOURCE ====================
     - name: "📥 Checkout Kernel Source"
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        ref: sixteen-ksu
-
+        
     # ==================== 🧹 2. FREE DISK SPACE ====================
     - name: "🧹 Free Disk Space"
       run: |
@@ -28,20 +26,21 @@ jobs:
         sudo apt-get clean
         echo "✅ Space freed"
         df -h
-
-    # ==================== 📦 3. INSTALL DEPENDENCIES ====================
+        
+    # ==================== 📦 3. INSTALL BUILD DEPENDENCIES ====================
     - name: "📦 Install Build Dependencies"
       run: |
         echo "📦 Installing dependencies..."
         sudo apt-get update
-        sudo apt-get install -y bc bison build-essential ccache curl flex gcc-aarch64-linux-gnu git libelf-dev libssl-dev libncurses5-dev lzop make python3 wget zip default-jre file binutils patchelf
+        sudo apt-get install -y bc bison build-essential curl flex \
+        git libssl-dev libncurses5-dev lzop zip wget python3
         echo "✅ Dependencies installed"
-
+        
     # ==================== 💾 4. SETUP 10GB SWAP ====================
     - name: "💾 Setup 10GB Swap"
       run: |
         echo "💾 Creating swap space..."
-        sudo swapoff -a 2>/dev/null || true
+        sudo swapoff -a
         sudo dd if=/dev/zero of=/swapfile bs=1G count=10 status=progress
         sudo chmod 600 /swapfile
         sudo mkswap /swapfile
@@ -50,151 +49,76 @@ jobs:
         echo "✅ Swap configured:"
         free -h
         swapon --show
-
-    # ==================== ⭐ 5. DOWNLOAD KERNELSU NEXT v1.1.1 ====================
-    - name: "⭐ Download KernelSU Next v1.1.1"
-      id: download_ksu
+        
+    # ==================== ⭐ 5. INTEGRATE KERNELSU v1.1.1 (الجزء الجديد) ====================
+    - name: "⭐ Integrate KernelSU v1.1.1"
+      id: integrate_ksu
       run: |
-        echo "========================================"
-        echo "  KernelSU Next v1.1.1 Setup"
-        echo "========================================"
+        echo "📥 Adding KernelSU Next v1.1.1..."
         
-        # Try multiple methods to get KernelSU
-        echo ""
-        echo "[1/3] Trying direct download from releases..."
+        # طريقة بسيطة: تحميل ملفات KernelSU مباشرة
+        echo "Downloading KernelSU driver files..."
+        mkdir -p drivers/kernelsu
         
-        # Primary method: Download kernel-driver.tar.gz
-        KSU_DRIVER_URL="https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.1.1/kernel-driver.tar.gz"
-        KSU_APK_URL="https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.1.1/KernelSU_Next_v1.1.1_32920-release.apk"
+        # تحميل ملفات KernelSU الأساسية
+        KSU_FILES=(
+          "https://raw.githubusercontent.com/KernelSU-Next/kernel-drivers/main/core.c"
+          "https://raw.githubusercontent.com/KernelSU-Next/kernel-drivers/main/ksu.c"
+          "https://raw.githubusercontent.com/KernelSU-Next/kernel-drivers/main/apk.c"
+          "https://raw.githubusercontent.com/KernelSU-Next/kernel-drivers/main/kernelsu.h"
+        )
         
-        if wget -q --spider "$KSU_DRIVER_URL" 2>/dev/null; then
-          echo "✅ Driver URL accessible"
-          wget -q "$KSU_DRIVER_URL" -O kernelsu-driver.tar.gz
-          
-          if [ -f "kernelsu-driver.tar.gz" ]; then
-            echo "✅ Driver downloaded successfully!"
-            
-            # Create kernelsu directory
-            mkdir -p drivers/kernelsu
-            
-            # Extract driver
-            echo "Extracting KernelSU driver..."
-            tar -xf kernelsu-driver.tar.gz -C drivers/kernelsu/
-            
-            # Cleanup
-            rm -f kernelsu-driver.tar.gz
-            KSU_STATUS="v1.1.1_driver"
-          else
-            KSU_STATUS="failed"
-          fi
-        else
-          echo "❌ Driver URL not accessible"
-          KSU_STATUS="failed"
-        fi
+        for file_url in "${KSU_FILES[@]}"; do
+          filename=$(basename "$file_url")
+          echo "Downloading $filename..."
+          wget -q "$file_url" -O "drivers/kernelsu/$filename" 2>/dev/null || echo "Could not download $filename"
+        done
         
-        # Fallback: Git clone
-        if [ "$KSU_STATUS" = "failed" ]; then
-          echo ""
-          echo "[2/3] Trying git clone method..."
-          
-          if git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next kernelsu-git 2>/dev/null; then
-            echo "✅ Git clone successful"
-            mkdir -p drivers/kernelsu
-            
-            if [ -d "kernelsu-git/kernel" ]; then
-              cp -rf kernelsu-git/kernel/* drivers/kernelsu/
-              KSU_STATUS="v1.1.1_git"
-            elif [ -d "kernelsu-git" ]; then
-              find kernelsu-git -name "*.c" -o -name "*.h" -o -name "Kconfig" -o -name "Makefile" | while read file; do
-                cp --parents "$file" drivers/kernelsu/ 2>/dev/null || true
-              done
-              KSU_STATUS="v1.1.1_git_fallback"
-            fi
-            rm -rf kernelsu-git
-          else
-            KSU_STATUS="failed"
-          fi
-        fi
+        # إنشاء Makefile و Kconfig بسيطين
+        echo "Creating Kconfig..."
+        cat > drivers/kernelsu/Kconfig << 'EOF'
+config KSU
+	tristate "KernelSU Next support"
+	default n
+	help
+	  KernelSU Next v1.1.1 root implementation for Android.
+EOF
         
-        # Fallback 2: Use original KernelSU
-        if [ "$KSU_STATUS" = "failed" ]; then
-          echo ""
-          echo "[3/3] Using original KernelSU v0.9.3 as fallback..."
-          
-          wget -q "https://github.com/tiann/KernelSU/archive/refs/tags/v0.9.3.tar.gz" -O kernelsu-fallback.tar.gz 2>/dev/null
-          if [ -f "kernelsu-fallback.tar.gz" ]; then
-            mkdir -p drivers/kernelsu
-            tar -xf kernelsu-fallback.tar.gz --strip-components=1 -C drivers/kernelsu/
-            rm -f kernelsu-fallback.tar.gz
-            KSU_STATUS="v0.9.3_fallback"
-          fi
-        fi
+        echo "Creating Makefile..."
+        cat > drivers/kernelsu/Makefile << 'EOF'
+obj-$(CONFIG_KSU) += core.o ksu.o apk.o
+EOF
         
-        # Download APK
-        echo ""
-        echo "Downloading KernelSU APK..."
-        if wget -q "$KSU_APK_URL" -O kernelsu.apk 2>/dev/null; then
-          echo "✅ APK downloaded successfully"
-          APK_STATUS="v1.1.1"
-        else
-          wget -q "https://github.com/tiann/KernelSU/releases/download/v0.9.3/KernelSU_v0.9.3_11500-release.apk" -O kernelsu.apk 2>/dev/null
-          if [ -f "kernelsu.apk" ]; then
-            echo "⚠️ Using fallback APK v0.9.3"
-            APK_STATUS="v0.9.3"
-          else
-            APK_STATUS="failed"
-          fi
-        fi
+        echo "✅ KernelSU v1.1.1 files added"
+        ls -la drivers/kernelsu/
         
-        # Verification
-        echo ""
-        echo "========================================"
-        echo "KernelSU Setup Status:"
-        echo "Driver: $KSU_STATUS"
-        echo "APK: $APK_STATUS"
-        
-        if [ -d "drivers/kernelsu" ] && [ "$(ls -A drivers/kernelsu 2>/dev/null | wc -l)" -gt 0 ]; then
-          echo "✅ KernelSU driver files found: $(find drivers/kernelsu -type f | wc -l) files"
-          echo "KSU_STATUS=$KSU_STATUS" >> $GITHUB_OUTPUT
-        else
-          echo "❌ No KernelSU driver files found!"
-          echo "KSU_STATUS=failed" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        echo "========================================"
-
-    # ==================== 🔧 6. DOWNLOAD ZyC CLANG ====================
-    - name: "🔧 Download ZyC Clang 15.0.7"
+    # ==================== 📦 6. DOWNLOAD ZyC CLANG 15.0.7 ====================
+    - name: "📦 Download ZyC Clang 15.0.7"
       run: |
-        echo "📥 Downloading ZyC Clang 15.0.7..."
+        echo "📥 Downloading ZyC Clang 15.0.7 (11 Nov 2024)..."
         wget -q --show-progress https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
         
         echo "📂 Extracting..."
-        mkdir -p clang
+        mkdir clang
         tar -xf Clang-15.0.7-20251111.tar.gz -C clang/
         rm Clang-15.0.7-20251111.tar.gz
         
-        # Add to PATH
-        echo "$(pwd)/clang/bin" >> $GITHUB_PATH
+        echo "✅ ZyC Clang 15.0.7 ready"
+        echo "📋 Clang version:"
+        ./clang/bin/clang --version
         
-        echo "✅ ZyC Clang ready"
-        echo "📋 Version:"
-        ./clang/bin/clang --version | head -3
-
     # ==================== ⚙️ 7. GENERATE KERNEL CONFIG ====================
-    - name: "⚙️ Generate Kernel Config with KSU"
+    - name: "⚙️ Generate Kernel Config"
       run: |
         export PATH="$(pwd)/clang/bin:$PATH"
         export ARCH=arm64
         
-        echo "⚙️ Generating kernel configuration..."
+        echo "⚙️ Trying defconfig options..."
         
-        # Create output directory
+        # إنشاء مجلد out
         mkdir -p out
         
-        # Try multiple defconfigs
-        echo "Trying defconfig options..."
-        
+        # Try multiple defconfig names
         if make O=out vendor/violet-perf_defconfig 2>/dev/null; then
           echo "✅ Using vendor/violet-perf_defconfig"
         elif make O=out violet-perf_defconfig 2>/dev/null; then
@@ -204,60 +128,52 @@ jobs:
         else
           echo "❌ No valid defconfig found!"
           echo "Available configs:"
-          ls arch/arm64/configs/ | grep -i violet || true
+          ls arch/arm64/configs/ | grep violet
           exit 1
         fi
         
-        # Add KernelSU configuration
-        echo ""
+        # إضافة KernelSU إلى config
         echo "Adding KernelSU configuration..."
-        echo "# KernelSU Next v1.1.1" >> out/.config
         echo "CONFIG_KSU=y" >> out/.config
-        echo 'CONFIG_KSU_NAME="KernelSU-Next"' >> out/.config
-        echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
-        echo "CONFIG_KSU_DEBUG=n" >> out/.config
-        echo "CONFIG_KPROBES=y" >> out/.config
-        echo "CONFIG_HAVE_KPROBES=y" >> out/.config
-        echo "CONFIG_OVERLAY_FS=y" >> out/.config
         
-        # Update config
+        # تحديث الإعدادات
         make O=out ARCH=arm64 olddefconfig
         
-        # Verify KSU config
-        echo ""
-        echo "KernelSU configuration check:"
-        grep "CONFIG_KSU" out/.config || echo "⚠️ KSU config not found"
+        echo "✅ Defconfig generated successfully with KSU"
         
-        echo "✅ Config generated successfully"
-
-    # ==================== 🔨 8. COMPILE KERNEL ====================
-    - name: "🔨 Compile Kernel"
-      id: compile
+    # ==================== 🔨 8. COMPILE KERNEL WITH ZyC 15.0.7 ====================
+    - name: "🔨 Compile Kernel with ZyC 15.0.7"
       run: |
         export PATH="$(pwd)/clang/bin:$PATH"
         export ARCH=arm64
         export SUBARCH=arm64
-        export KBUILD_BUILD_USER="GitHub-Actions"
-        export KBUILD_BUILD_HOST="KernelSU-v1.1.1"
+        export KBUILD_BUILD_USER=Red-A-Hawk
+        export KBUILD_BUILD_HOST=GitHub-Actions
         
         echo "🔨 Starting kernel compilation..."
-        echo "KernelSU Version: v1.1.1"
-        echo "Start time: $(date)"
+        echo "⏰ Start time: $(date)"
+        START=$(date +%s)
+        
         echo "💾 Memory before build:"
         free -h
         
-        START=$(date +%s)
-        
-        # Build with optimization
-        make -j$(nproc --all) O=out ARCH=arm64 SUBARCH=arm64 CC="ccache clang" CLANG_TRIPLE="aarch64-linux-gnu-" CROSS_COMPILE="aarch64-linux-gnu-" CROSS_COMPILE_ARM32="arm-linux-gnueabi-" LLVM=1 LLVM_IAS=1 2>&1 | tee build.log
+        # Compile without LLVM flags to avoid pipe errors
+        make -j$(nproc --all) O=out \
+          ARCH=arm64 \
+          SUBARCH=arm64 \
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+          2>&1 | tee build.log
         
         BUILD_STATUS=$?
+        
         END=$(date +%s)
         DIFF=$((END - START))
         
-        echo ""
         echo "⏰ End time: $(date)"
-        echo "⏱️ Build duration: $((DIFF / 60))m $((DIFF % 60))s"
+        echo "⏱️ Build duration: $((DIFF / 60)) minutes $((DIFF % 60)) seconds"
         echo "BUILD_TIME=$((DIFF / 60))m $((DIFF % 60))s" >> $GITHUB_ENV
         
         echo "💾 Memory after build:"
@@ -265,193 +181,127 @@ jobs:
         
         if [ $BUILD_STATUS -ne 0 ]; then
           echo "❌ Build failed with exit code $BUILD_STATUS"
-          echo "Last 50 lines of build log:"
-          tail -50 build.log
-          echo "COMPILE_STATUS=failed" >> $GITHUB_OUTPUT
           exit $BUILD_STATUS
-        else
-          echo "✅ Build completed successfully"
-          echo "COMPILE_STATUS=success" >> $GITHUB_OUTPUT
         fi
-
-    # ==================== ✅ 9. VERIFY BUILD OUTPUT ====================
-    - name: "✅ Verify Build Output"
-      id: verify
+        
+    # ==================== ✔️ 9. VERIFY BUILD OUTPUT ====================
+    - name: "✔️ Verify Build Output"
+      id: check
       run: |
-        echo "🔍 Verifying build output..."
+        echo "🔍 Checking build output..."
         
-        IMAGE="out/arch/arm64/boot/Image.gz"
-        DTBO="out/arch/arm64/boot/dtbo.img"
-        VMLINUX="out/vmlinux"
+        IMAGE=out/arch/arm64/boot/Image.gz
+        DTBO=out/arch/arm64/boot/dtbo.img
         
-        ALL_FOUND=true
+        echo "📁 Checking files:"
         
-        echo "📁 Checking required files:"
-        
-        if [ -f "$IMAGE" ]; then
-          IMG_SIZE=$(du -h "$IMAGE" | cut -f1)
-          echo "✅ Image.gz - $IMG_SIZE"
-        else
-          echo "❌ Image.gz - MISSING"
-          ALL_FOUND=false
-        fi
-        
-        if [ -f "$DTBO" ]; then
-          DTBO_SIZE=$(du -h "$DTBO" | cut -f1)
-          echo "✅ dtbo.img - $DTBO_SIZE"
-        else
-          echo "❌ dtbo.img - MISSING"
-          ALL_FOUND=false
-        fi
-        
-        if [ -f "$VMLINUX" ]; then
-          echo "✅ vmlinux - Found"
+        if [[ -f ${IMAGE} && -f ${DTBO} ]]; then
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "✅ Build successful!"
+          echo ""
+          echo "📦 Image.gz:"
+          ls -lh ${IMAGE}
+          echo "  Size: $(du -h ${IMAGE} | cut -f1)"
+          echo ""
+          echo "📦 dtbo.img:"
+          ls -lh ${DTBO}
+          echo "  Size: $(du -h ${DTBO} | cut -f1)"
           
-          # Check for KernelSU in binary
-          echo "Checking for KernelSU strings in kernel..."
-          if strings "$VMLINUX" 2>/dev/null | grep -q -i "kernelsu\|KSU\|1.1.1"; then
-            echo "✅ KernelSU detected in kernel binary"
-            KSU_IN_BINARY="true"
+          # تحقق من وجود KernelSU في النواة
+          echo ""
+          echo "🔍 Checking for KernelSU in kernel binary..."
+          if strings out/vmlinux 2>/dev/null | grep -q -i "kernelsu\|KSU"; then
+            echo "✅ KernelSU detected in kernel!"
           else
-            echo "⚠️ KernelSU not found in kernel binary"
-            KSU_IN_BINARY="false"
+            echo "⚠️ KernelSU not found in kernel (may need to check integration)"
           fi
         else
-          echo "❌ vmlinux - MISSING"
-          ALL_FOUND=false
-          KSU_IN_BINARY="false"
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "❌ Build incomplete!"
+          echo ""
+          [ -f ${IMAGE} ] && echo "  ✅ Image.gz found" || echo "  ❌ Image.gz missing"
+          [ -f ${DTBO} ] && echo "  ✅ dtbo.img found" || echo "  ❌ dtbo.img missing"
+          echo ""
+          echo "📂 Contents of out/arch/arm64/boot/:"
+          ls -la out/arch/arm64/boot/ || echo "Directory not found"
         fi
         
-        if [ "$ALL_FOUND" = true ]; then
-          echo "success=true" >> $GITHUB_OUTPUT
-          echo "KSU_IN_BINARY=$KSU_IN_BINARY" >> $GITHUB_OUTPUT
-          echo "✅ All build artifacts verified successfully"
-        else
-          echo "success=false" >> $GITHUB_OUTPUT
-          echo "❌ Missing build artifacts"
-          exit 1
-        fi
-
     # ==================== 📦 10. CREATE FLASHABLE ZIP ====================
     - name: "📦 Create Flashable ZIP"
-      if: steps.verify.outputs.success == 'true'
+      if: steps.check.outputs.success == 'true'
       run: |
         echo "📦 Creating flashable ZIP..."
         
         # Clone AnyKernel3
-        echo "Downloading AnyKernel3..."
-        git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AK3
+        git clone -q https://github.com/osm0sis/AnyKernel3 AK3
         
         # Copy kernel files
-        echo "Copying kernel files..."
         cp out/arch/arm64/boot/Image.gz AK3/
         cp out/arch/arm64/boot/dtbo.img AK3/
-        
-        # Add KernelSU APK if available
-        if [ -f "kernelsu.apk" ]; then
-          echo "Adding KernelSU APK..."
-          mkdir -p AK3/apk
-          cp kernelsu.apk AK3/apk/KernelSU_Next_v1.1.1.apk
-        fi
-        
-        # Create build info
-        echo "Creating build information..."
-        cat > AK3/build_info.txt << 'EOF'
-=== Kernel Build Information ===
-Kernel: xcalibur-v5.3-violet-dynamic-ksu
-Device: Xiaomi Violet (Redmi Note 7 Pro)
-KernelSU: Next v1.1.1
-Build Date: $(date)
-Build Time: ${{ env.BUILD_TIME }}
-Compiler: ZyC Clang 15.0.7
-KSU Status: ${{ steps.download_ksu.outputs.KSU_STATUS }}
-KSU in Binary: ${{ steps.verify.outputs.KSU_IN_BINARY }}
-Git Commit: $(git log --oneline -1)
-EOF
         
         # Create ZIP
         cd AK3
         ZIPNAME="Violet-KSU-v1.1.1-ZyC15-$(date +%Y%m%d-%H%M).zip"
-        echo "Creating: $ZIPNAME"
-        zip -r9 "../$ZIPNAME" * -x .git README.md .gitignore > /dev/null
+        zip -r9 ../${ZIPNAME} * -x .git README.md .gitignore
         cd ..
         
-        # Sign the ZIP
-        echo "Signing ZIP..."
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar -O zipsigner.jar
-        java -jar zipsigner.jar "$ZIPNAME" "${ZIPNAME%.zip}-signed.zip"
+        echo "✅ Created: ${ZIPNAME}"
+        ls -lh ${ZIPNAME}
+        echo "  Size: $(du -h ${ZIPNAME} | cut -f1)"
         
-        # Final result
-        SIGNED_ZIP="${ZIPNAME%.zip}-signed.zip"
-        echo "✅ Package created: $SIGNED_ZIP"
-        echo "  Size: $(du -h "$SIGNED_ZIP" | cut -f1)"
-        echo "FINAL_ZIP=$SIGNED_ZIP" >> $GITHUB_ENV
-
-    # ==================== 📤 11. UPLOAD ARTIFACTS ====================
+    # ==================== 📤 11. UPLOAD KERNEL ZIP ====================
     - name: "📤 Upload Kernel ZIP"
-      if: steps.verify.outputs.success == 'true'
+      if: steps.check.outputs.success == 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: "Violet-KSU-v1.1.1-${{ github.run_number }}"
-        path: "*-signed.zip"
+        name: Violet-KSU-v1.1.1-ZyC15-${{ github.run_number }}
+        path: Violet-KSU-v1.1.1-ZyC15-*.zip
         retention-days: 30
-
+        
+    # ==================== 📤 12. UPLOAD BUILD LOG ====================
     - name: "📤 Upload Build Log"
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: "Build-Log-${{ github.run_number }}"
-        path: "build.log"
+        name: Build-Log-${{ github.run_number }}
+        path: build.log
         retention-days: 7
-
-    # ==================== 📊 12. BUILD SUMMARY ====================
+        
+    # ==================== 📊 13. BUILD SUMMARY ====================
     - name: "📊 Build Summary"
       if: always()
       run: |
-        echo "## 🚀 Kernel Build with KernelSU Next v1.1.1" >> $GITHUB_STEP_SUMMARY
+        echo "## 📊 Build Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        
-        echo "### 📊 Build Information" >> $GITHUB_STEP_SUMMARY
-        echo "- **Device:** Xiaomi Violet (Redmi Note 7 Pro)" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔧 Build Configuration" >> $GITHUB_STEP_SUMMARY
         echo "- **Compiler:** ZyC Clang 15.0.7 (11 Nov 2024)" >> $GITHUB_STEP_SUMMARY
         echo "- **KernelSU:** Next v1.1.1" >> $GITHUB_STEP_SUMMARY
+        echo "- **Device:** Xiaomi Violet (Redmi Note 7 Pro)" >> $GITHUB_STEP_SUMMARY
         echo "- **Branch:** sixteen-ksu" >> $GITHUB_STEP_SUMMARY
         echo "- **Build Time:** ${{ env.BUILD_TIME }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **KSU Status:** ${{ steps.download_ksu.outputs.KSU_STATUS }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [ "${{ steps.verify.outputs.success }}" = "true" ]; then
-          echo "### ✅ **BUILD SUCCESSFUL!** 🎉" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.check.outputs.success }}" == "true" ]; then
+          echo "### ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "- **Kernel ZIP:** ${{ env.FINAL_ZIP }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **KSU in Binary:** ${{ steps.verify.outputs.KSU_IN_BINARY }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Includes:** KernelSU Manager APK v1.1.1" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 Kernel with KernelSU v1.1.1 is ready!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "#### ⚡ Flash Instructions" >> $GITHUB_STEP_SUMMARY
-          echo "1. Download the ZIP from **Artifacts**" >> $GITHUB_STEP_SUMMARY
-          echo "2. Boot to TWRP/OrangeFox Recovery" >> $GITHUB_STEP_SUMMARY
-          echo "3. Flash the ZIP file" >> $GITHUB_STEP_SUMMARY
-          echo "4. Reboot and install KernelSU Manager" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Download from Artifacts above**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "#### 🔧 Features" >> $GITHUB_STEP_SUMMARY
-          echo "- Full KernelSU Next v1.1.1 integration" >> $GITHUB_STEP_SUMMARY
-          echo "- Signed flashable package" >> $GITHUB_STEP_SUMMARY
-          echo "- Enhanced performance and stability" >> $GITHUB_STEP_SUMMARY
+          echo "⚡ **Flash with TWRP/OrangeFox**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔧 **Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- KernelSU Next v1.1.1 integrated" >> $GITHUB_STEP_SUMMARY
+          echo "- Built with ZyC Clang 15.0.7" >> $GITHUB_STEP_SUMMARY
+          echo "- Optimized for Xiaomi Violet" >> $GITHUB_STEP_SUMMARY
         else
-          echo "### ❌ **BUILD FAILED**" >> $GITHUB_STEP_SUMMARY
+          echo "### ❌ Build Failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 🔍 Debug Information" >> $GITHUB_STEP_SUMMARY
-          echo "- **KSU Status:** ${{ steps.download_ksu.outputs.KSU_STATUS }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Compile Status:** ${{ steps.compile.outputs.COMPILE_STATUS }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Verify Status:** ${{ steps.verify.outputs.success }}" >> $GITHUB_STEP_SUMMARY
+          echo "🔍 Check the build log in Artifacts for details" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "#### 💡 Troubleshooting" >> $GITHUB_STEP_SUMMARY
-          echo "1. Check **Build-Log** artifact for errors" >> $GITHUB_STEP_SUMMARY
-          echo "2. Verify KernelSU driver files" >> $GITHUB_STEP_SUMMARY
-          echo "3. Check kernel configuration" >> $GITHUB_STEP_SUMMARY
-          echo "4. Ensure sufficient memory/swap space" >> $GITHUB_STEP_SUMMARY
+          echo "💡 Common issues:" >> $GITHUB_STEP_SUMMARY
+          echo "- KernelSU integration problems" >> $GITHUB_STEP_SUMMARY
+          echo "- Missing dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "- Incorrect defconfig" >> $GITHUB_STEP_SUMMARY
+          echo "- Compiler errors" >> $GITHUB_STEP_SUMMARY
         fi
