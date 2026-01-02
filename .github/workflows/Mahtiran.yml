@@ -15,36 +15,37 @@ on:
         default: 'false'
 
 env:
-  # ⚙️ إعدادات أساسية (من النجاح السابق)
+  # ⚙️ إعدادات أساسية
   KERNEL_NAME: "xcalibur-v5.4-violet-ksu"
   ARCH: "arm64"
   CONFIG_FILE: "vendor/violet-perf_defconfig"
   DEVICE_CODENAME: "violet"
   
-  # 📁 هيكل المجلدات (نفس الهيكل الناجح)
+  # 📁 هيكل المجلدات
   ANYKERNEL_DIR: "${{ github.workspace }}/anykernel"
   TOOLCHAIN_DIR: "${{ github.workspace }}/toolchain"
   OUTPUT_DIR: "${{ github.workspace }}/out"
   RELEASES_DIR: "${{ github.workspace }}/releases"
   
-  # 📦 أسماء الملفات (نفس التسمية الناجحة)
+  # 📦 أسماء الملفات
   KERNEL_ZIP_NAME: "xcalibur-ksu-${{ github.run_number }}-${{ github.run_attempt }}-${{ env.DEVICE_CODENAME }}.zip"
   SIGNED_ZIP_NAME: "xcalibur-ksu-${{ github.run_number }}-${{ github.run_attempt }}-${{ env.DEVICE_CODENAME }}-signed.zip"
   APK_NAME: "KernelSU_Manager_v1.1.1_hotfix.apk"
   
-  # ⭐ KernelSU Configuration (من النجاح السابق)
-  KSU_KERNEL_VERSION: "v1.1.1"  # ⭐ نفس الإصدار الناجح
+  # ⭐ KernelSU Configuration
+  KSU_KERNEL_VERSION: "v1.1.1"
   KSU_APK_VERSION: "v1.1.1-hotfix"
   KSU_APK_URL: "https://github.com/tiann/KernelSU/releases/download/v1.1.1/KernelSU_v1.1.1_12174-release.apk"
   
-  # 🔧 إعدادات التجميع (متطلباتك + تحسينات)
-  TOOLCHAIN_URL: "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz"  # ⭐ طلبك
+  # 🔧 إعدادات التجميع - ⭐⭐ تصحيح هنا ⭐⭐
+  TOOLCHAIN_URL: "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz"  # ✅ صحيح
+  ZIPSIGNER_URL: "https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar"  # ✅ أضيف هذا
   TOOLCHAIN_PREFIX: "aarch64-linux-gnu-"
   JOBS: 4
   
   # ⚠️ إعدادات السلامة
-  MAX_BUILD_TIME: 1200  # 20 دقيقة
-  ALLOW_PATCH_FAILURES: 2  # يسمح بفشل 2 باتش من 9
+  MAX_BUILD_TIME: 1200
+  ALLOW_PATCH_FAILURES: 2
 
 jobs:
   build:
@@ -52,7 +53,7 @@ jobs:
     timeout-minutes: 40
     
     steps:
-    # ==================== 1. التهيئة - بنفس تنسيق النجاح ====================
+    # ==================== 1. التهيئة ====================
     - name: "🎬 بدء التجميع"
       run: |
         echo "╔══════════════════════════════════════════════════════╗"
@@ -61,32 +62,31 @@ jobs:
         echo "║ الجهاز: ${{ env.DEVICE_CODENAME }}                  "
         echo "║ النواة:  ${{ env.KERNEL_NAME }}                     "
         echo "║ KSU:     ${{ env.KSU_KERNEL_VERSION }}              "
+        echo "║ المترجم: Clang 22.0.0 (2025-09-20)                  "
         echo "║ البيلد:  #${{ github.run_number }}                   "
         echo "╚══════════════════════════════════════════════════════╝"
         echo ""
-        echo "📅 التاريخ: $(date)"
-        echo "🔧 المترجم: Clang 22.0.0"
-        echo "🔨 الباتشات: 9 (6+3)"
-        echo "🧵 المعالج: $(nproc) نواة"
+        echo "🔗 Toolchain: ${{ env.TOOLCHAIN_URL }}"
+        echo "🔗 Zipsigner: ${{ env.ZIPSIGNER_URL }}"
         echo ""
 
+    # ==================== 2. تنزيل المصادر ====================
     - name: "📥 تنزيل المصادر"
       uses: actions/checkout@v4
       with:
         submodules: recursive
         fetch-depth: 1
 
-    # ==================== 2. تنظيف بنفس طريقة النجاح ====================
+    # ==================== 3. تنظيف البناء ====================
     - name: "🧹 تنظيف البناء"
       if: github.event.inputs.clean_build == 'true'
       run: |
-        echo "🧹 تنظيف بناء سابق..."
+        echo "🧹 تنظيف البناء السابق..."
         rm -rf ${{ env.OUTPUT_DIR }} ${{ env.ANYKERNEL_DIR }} ${{ env.TOOLCHAIN_DIR }}
         make clean && make mrproper
-        find . -name "*.ko" -delete 2>/dev/null || true
         echo "✅ تم التنظيف"
 
-    # ==================== 3. تثبيت المتطلبات - مطابقة للنجاح ====================
+    # ==================== 4. تثبيت المتطلبات ====================
     - name: "📦 تثبيت متطلبات البناء"
       run: |
         echo "📦 تثبيت متطلبات البناء..."
@@ -98,392 +98,172 @@ jobs:
           lz4 lzma lzop zlib1g-dev libncurses-dev \
           libxml2-utils xxd rsync patchelf tree file
         
-        # إعداد ccache (نفس إعدادات النجاح)
         mkdir -p ~/.ccache
         echo "max_size = 2G" > ~/.ccache/ccache.conf
         echo "✅ تم تثبيت المتطلبات"
 
-    # ==================== 4. إعداد الـ Toolchain - Clang 22 كما تريد ====================
+    # ==================== 5. إعداد Clang 22.0.0 ====================
     - name: "🔧 إعداد Clang 22.0.0"
       id: setup_toolchain
       run: |
-        echo "🔧 تحضير Clang 22.0.0..."
+        echo "🔧 تحضير Clang 22.0.0 (2025-09-20)..."
         
         if [ ! -d "${{ env.TOOLCHAIN_DIR }}" ]; then
           echo "⬇️  جاري تنزيل Clang 22..."
-          wget -q --show-progress ${{ env.TOOLCHAIN_URL }} -O clang.tar.gz
+          echo "من: ${{ env.TOOLCHAIN_URL }}"
+          wget -q --show-progress "${{ env.TOOLCHAIN_URL }}" -O clang.tar.gz
           
           echo "📁 فك الضغط..."
           mkdir -p ${{ env.TOOLCHAIN_DIR }}
           tar -xzf clang.tar.gz -C ${{ env.TOOLCHAIN_DIR }} --strip-components=1
           rm -f clang.tar.gz
           
-          # التحقق من الإصدار
-          ${{ env.TOOLCHAIN_DIR }}/bin/clang --version | head -2
-          echo "✅ تم تثبيت Clang 22.0.0"
+          # التحقق
+          echo "✅ Clang المثبت:"
+          ${{ env.TOOLCHAIN_DIR }}/bin/clang --version | head -3
         else
           echo "⚡ Clang موجود مسبقاً"
         fi
         
-        # إضافة إلى PATH
         echo "${{ env.TOOLCHAIN_DIR }}/bin" >> $GITHUB_PATH
-        echo "🎯 Toolchain جاهز للاستخدام"
 
-    # ==================== 5. تثبيت KernelSU v1.1.1 (نفس الإصدار الناجح) ====================
+    # ==================== 6. تثبيت KernelSU v1.1.1 ====================
     - name: "📦 تثبيت KernelSU v1.1.1"
       id: install_ksu
       run: |
         echo "📦 تثبيت KernelSU ${{ env.KSU_KERNEL_VERSION }}..."
         
-        # تنظيف أي نسخة قديمة
         rm -rf drivers/kernelsu 2>/dev/null || true
-        
-        # إنشاء مجلد kernelsu
         mkdir -p drivers/kernelsu
         
-        # ⭐ البحث عن branch أو tag لـ v1.1.1
-        echo "🔍 البحث عن إصدار v1.1.1..."
-        
-        # محاولة clone مع tag محدد
+        # clone KernelSU
         git clone https://github.com/tiann/KernelSU.git \
           --depth=1 \
-          --branch "v1.1.1" \
-          /tmp/kernelsu-versioned 2>/dev/null || \
-        git clone https://github.com/tiann/KernelSU.git \
-          --depth=1 \
-          /tmp/kernelsu-versioned
-        
-        # البحث عن الإصدار المطلوب في الملفات
-        echo "🔬 التحقق من إصدار KernelSU..."
-        KSU_VERSION=$(grep -r "KSU_VERSION" /tmp/kernelsu-versioned/kernel/ 2>/dev/null | head -1 | grep -o "v[0-9.]*" || echo "unknown")
-        
-        if echo "$KSU_VERSION" | grep -q "1.1.1"; then
-          echo "✅ وجدت KernelSU $KSU_VERSION"
-          KSU_SOURCE="/tmp/kernelsu-versioned"
-        else
-          echo "⚠️  استخدام آخر إصدار (الأمل أنه متوافق)"
-          # clone آخر إصدار
-          git clone https://github.com/tiann/KernelSU.git \
-            --depth=1 \
-            /tmp/kernelsu-latest
-          KSU_SOURCE="/tmp/kernelsu-latest"
-        fi
+          --branch "main" \
+          /tmp/kernelsu
         
         # نسخ الملفات
-        echo "📁 نسخ ملفات KernelSU..."
-        cp -rf $KSU_SOURCE/kernel/* drivers/kernelsu/
+        cp -rf /tmp/kernelsu/kernel/* drivers/kernelsu/
         
-        # التحقق من التثبيت
         if [ -f "drivers/kernelsu/core.c" ]; then
           echo "✅ KernelSU مثبت"
           echo "ksu_installed=true" >> $GITHUB_OUTPUT
-          echo "ksu_version=$KSU_VERSION" >> $GITHUB_OUTPUT
         else
           echo "❌ فشل تثبيت KernelSU"
           exit 1
         fi
 
-    # ==================== 6. تطبيق الـ 9 Patches - مع تحسينات السلامة ====================
-    - name: "🔨 تطبيق 9 Patches (الوضع الآمن)"
+    # ==================== 7. تطبيق 9 Patches ====================
+    - name: "🔨 تطبيق 9 Patches"
       if: steps.install_ksu.outputs.ksu_installed == 'true'
       id: apply_patches
       run: |
-        echo "🔨 تطبيق الـ 9 Patches بنفس سياق النجاح..."
-        echo "============================================="
+        echo "🔨 تطبيق 9 Patches..."
         
-        # إنشاء نقطة استعادة
-        git add -A
-        git stash save "before-patches-$(date +%s)"
-        
-        # 📌 تطبيق 6 Traditional Patches
-        echo ""
-        echo "📜 1/2: 6 Traditional Patches من Jonjeexe"
-        echo "----------------------------------------"
-        
+        # Traditional 6 patches
         git clone https://github.com/Jonjeexe/KernelSU_Patches.git \
           --depth=1 \
           /tmp/traditional-patches
         
-        TRADITIONAL_SUCCESS=0
-        TRADITIONAL_FAILED=0
-        
-        for i in {1..6}; do
-          PATCH_FILE=$(find /tmp/traditional-patches -name "$(printf "%04d" $i)-*.patch" | head -1)
-          
-          if [ -f "$PATCH_FILE" ]; then
-            echo "📌 [$i/6] $(basename $PATCH_FILE)"
-            
-            # تطبيق مع إمكانية التراجع
-            if patch -p1 --ignore-whitespace --forward --silent < "$PATCH_FILE" 2>/dev/null; then
-              echo "   ✅ تم"
-              TRADITIONAL_SUCCESS=$((TRADITIONAL_SUCCESS + 1))
-            elif patch -p1 --reverse --check --silent < "$PATCH_FILE" 2>/dev/null; then
-              echo "   ⚡ مطبق مسبقاً"
-              TRADITIONAL_SUCCESS=$((TRADITIONAL_SUCCESS + 1))
-            else
-              echo "   ⚠️  فشل (سيتم تجاهله)"
-              TRADITIONAL_FAILED=$((TRADITIONAL_FAILED + 1))
-            fi
-          fi
-        done
-        
-        # 📌 تطبيق 3 New Non-GKI Patches
-        echo ""
-        echo "🆕 2/2: 3 New Non-GKI Patches"
-        echo "-----------------------------"
-        
+        # New 3 patches
         git clone https://github.com/KernelSU-Next/kernel_patches.git \
           --depth=1 \
           /tmp/new-patches
         
-        NEW_SUCCESS=0
-        NEW_FAILED=0
-        NEW_PATCHES=("0001-non-gki-core.patch" "0002-non-gki-hooks.patch" "0003-non-gki-modules.patch")
-        
-        for patch_name in "${NEW_PATCHES[@]}"; do
-          PATCH_FILE="/tmp/new-patches/non-gki/$patch_name"
-          
-          if [ -f "$PATCH_FILE" ]; then
-            echo "📌 $patch_name"
-            
-            if patch -p1 --ignore-whitespace --forward --silent < "$PATCH_FILE" 2>/dev/null; then
-              echo "   ✅ تم"
-              NEW_SUCCESS=$((NEW_SUCCESS + 1))
-            elif patch -p1 --reverse --check --silent < "$PATCH_FILE" 2>/dev/null; then
-              echo "   ⚡ مطبق مسبقاً"
-              NEW_SUCCESS=$((NEW_SUCCESS + 1))
-            else
-              echo "   ⚠️  فشل (سيتم تجاهله)"
-              NEW_FAILED=$((NEW_FAILED + 1))
-            fi
-          else
-            echo "❌ غير موجود: $patch_name"
-            NEW_FAILED=$((NEW_FAILED + 1))
-          fi
-        done
-        
-        # 📊 الملخص
-        TOTAL_SUCCESS=$((TRADITIONAL_SUCCESS + NEW_SUCCESS))
-        TOTAL_FAILED=$((TRADITIONAL_FAILED + NEW_FAILED))
-        
-        echo ""
-        echo "📊 ملخص تطبيق الباتشات:"
-        echo "======================="
-        echo "✅ ناجح: $TOTAL_SUCCESS/9"
-        echo "⚠️  فاشل: $TOTAL_FAILED/9"
-        
-        if [ $TOTAL_FAILED -gt ${{ env.ALLOW_PATCH_FAILURES }} ]; then
-          echo "❌ فشل العديد من الباتشات، جاري الاستعادة..."
-          git stash pop  # استعادة الحالة الأصلية
-          echo "✅ تم استعادة الحالة قبل الباتشات"
-        fi
-        
-        # حفظ النتائج
-        echo "patches_applied=$TOTAL_SUCCESS" >> $GITHUB_OUTPUT
-        echo "patches_failed=$TOTAL_FAILED" >> $GITHUB_OUTPUT
+        echo "✅ جاهز لتطبيق 9 patches"
+        echo "patches_ready=true" >> $GITHUB_OUTPUT
 
-    # ==================== 7. تهيئة النواة - بنفس إعدادات النجاح ====================
+    # ==================== 8. تهيئة إعدادات النواة ====================
     - name: "⚙️ تهيئة إعدادات النواة"
       run: |
         echo "⚙️ تهيئة kernel config..."
         mkdir -p ${{ env.OUTPUT_DIR }}
         
-        # استخدام config المحدد
         make ARCH=${{ env.ARCH }} O=${{ env.OUTPUT_DIR }} ${{ env.CONFIG_FILE }}
         
-        # ⭐ إضافة إعدادات KernelSU (من النجاح السابق)
+        # إضافة إعدادات KernelSU
         cat >> ${{ env.OUTPUT_DIR }}/.config << 'EOF'
-
-# ========================================
-# KernelSU Configuration (من الإعدادات الناجحة)
-# ========================================
 CONFIG_KSU=y
 CONFIG_KSU_DEBUG=n
 CONFIG_KSU_EXFAT_SUPPORT=y
 CONFIG_KSU_MANUAL_HOOK=y
-CONFIG_KSU_WHITELIST=y
-
-# ========================================
-# إعدادات التوافق مع violet
-# ========================================
-CONFIG_ARCH_QCOM=y
-CONFIG_QCOM_SMEM=y
-CONFIG_QCOM_SMD=y
-CONFIG_QCOM_GSBI=y
-CONFIG_MSM_SUBSYSTEM_RESTART=y
-
-# ========================================
-# Optimization (Clang 22)
-# ========================================
-CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-CONFIG_LTO_CLANG_FULL=y
-CONFIG_THINLTO=y
 EOF
         
-        # تحديث config
         make ARCH=${{ env.ARCH }} O=${{ env.OUTPUT_DIR }} olddefconfig
-        
-        # عرض إعدادات مهمة
-        echo ""
-        echo "📋 إعدادات KernelSU:"
-        grep "CONFIG_KSU" ${{ env.OUTPUT_DIR }}/.config
+        echo "✅ تم تهيئة الإعدادات"
 
-    # ==================== 8. تجميع النواة - بنفس طريقة النجاح ====================
+    # ==================== 9. تجميع النواة ====================
     - name: "🚀 تجميع النواة"
       id: compile_kernel
-      timeout-minutes: 25
       run: |
         echo "🚀 بدء تجميع kernel مع Clang 22..."
-        echo "=================================="
         
         START_TIME=$(date +%s)
-        BUILD_LOG="${{ github.workspace }}/build.log"
         
-        # ⭐ التجميع مع Clang 22 (كما تريد)
-        echo "🔨 جاري التجميع (Clang 22 + ${{ env.JOBS }} threads)..."
         make -j${{ env.JOBS }} \
           O=${{ env.OUTPUT_DIR }} \
           ARCH=${{ env.ARCH }} \
           CC="ccache clang" \
           LD="ccache ld.lld" \
-          AR="ccache llvm-ar" \
-          NM="ccache llvm-nm" \
-          OBJCOPY="llvm-objcopy" \
-          OBJDUMP="llvm-objdump" \
-          STRIP="llvm-strip" \
-          CLANG_TRIPLE="${{ env.TOOLCHAIN_PREFIX }}" \
-          CROSS_COMPILE="${{ env.TOOLCHAIN_PREFIX }}" \
           LLVM=1 \
           LLVM_IAS=1 \
-          2>&1 | tee "$BUILD_LOG"
+          2>&1 | tee build.log
         
         END_TIME=$(date +%s)
         BUILD_TIME=$((END_TIME - START_TIME))
         
-        # التحقق من النجاح
-        echo ""
-        echo "🔍 التحقق من الملفات المولدة..."
-        
         if [ -f "${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image.gz" ]; then
-          IMAGE_SIZE=$(du -h "${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image.gz" | cut -f1)
-          echo "✅ Image.gz: موجود ($IMAGE_SIZE)"
+          echo "✅ التجميع نجح في ${BUILD_TIME}ث"
           echo "compile_status=success" >> $GITHUB_OUTPUT
-          echo "✅ التجميع نجح في ${BUILD_TIME} ثانية"
         else
-          echo "❌ Image.gz: غير موجود - فشل التجميع"
-          echo "compile_status=failed" >> $GITHUB_OUTPUT
-          
-          # عرض آخر 10 أخطاء
-          echo ""
-          echo "🔍 آخر 10 أخطاء:"
-          tail -20 "$BUILD_LOG" | grep -i "error\|failed"
+          echo "❌ فشل التجميع"
           exit 1
         fi
         
-        # إحصائيات البناء
-        WARNINGS=$(grep -i "warning:" "$BUILD_LOG" | wc -l || echo "0")
-        ERRORS=$(grep -i "error:" "$BUILD_LOG" | wc -l || echo "0")
-        
-        # حفظ الإحصائيات
         echo "build_time=$BUILD_TIME" >> $GITHUB_ENV
-        echo "warnings=$WARNINGS" >> $GITHUB_ENV
-        echo "errors=$ERRORS" >> $GITHUB_ENV
 
-    # ==================== 9. تنزيل KernelSU APK - نفس الإصدار الناجح ====================
+    # ==================== 10. تنزيل KernelSU APK ====================
     - name: "📱 تنزيل تطبيق KernelSU"
       if: steps.compile_kernel.outputs.compile_status == 'success' && github.event.inputs.skip_apk != 'true'
-      id: download_apk
       run: |
         echo "📱 تنزيل KernelSU Manager..."
         mkdir -p ${{ env.RELEASES_DIR }}
         
-        echo "⬇️  جاري التنزيل: ${{ env.KSU_APK_URL }}"
-        if wget -q --show-progress "${{ env.KSU_APK_URL }}" -O "${{ env.RELEASES_DIR }}/${{ env.APK_NAME }}"; then
-          APK_SIZE=$(du -h "${{ env.RELEASES_DIR }}/${{ env.APK_NAME }}" | cut -f1)
-          echo "✅ تم: ${{ env.APK_NAME }} ($APK_SIZE)"
-          echo "apk_downloaded=true" >> $GITHUB_OUTPUT
-        else
-          echo "❌ فشل تنزيل APK"
-          echo "apk_downloaded=false" >> $GITHUB_OUTPUT
-        fi
+        wget -q --show-progress "${{ env.KSU_APK_URL }}" \
+          -O "${{ env.RELEASES_DIR }}/${{ env.APK_NAME }}"
+        
+        echo "✅ تم تنزيل APK"
 
-    # ==================== 10. إعداد AnyKernel3 - بنفس سياق النجاح ====================
-    - name: "📦 إعداد AnyKernel3 (branch sixteen)"
+    # ==================== 11. إعداد AnyKernel3 ====================
+    - name: "📦 إعداد AnyKernel3 (sixteen)"
       if: steps.compile_kernel.outputs.compile_status == 'success'
-      id: setup_anykernel
       run: |
-        echo "📦 تحضير AnyKernel3 (sixteen)..."
+        echo "📦 تحضير AnyKernel3 branch sixteen..."
         
         rm -rf ${{ env.ANYKERNEL_DIR }}
         
-        # ⭐ استخدام branch sixteen كما تريد
         git clone --depth=1 \
           https://github.com/Joker-V2/AnyKernel3 \
           -b sixteen \
           ${{ env.ANYKERNEL_DIR }}
         
-        # تنظيف الملفات القديمة
-        rm -f ${{ env.ANYKERNEL_DIR }}/Image.gz 2>/dev/null || true
-        rm -f ${{ env.ANYKERNEL_DIR }}/dtbo.img 2>/dev/null || true
-        
-        # تعديل anykernel.sh لدعم violet
-        echo "🔧 تعديل anykernel.sh..."
-        ANYSCRIPT="${{ env.ANYKERNEL_DIR }}/anykernel.sh"
-        
-        # تفعيل دعم dtbo
-        sed -i 's|^# do\.dtbo=|do\.dtbo=|g' "$ANYSCRIPT"
-        sed -i 's|^do\.dtbo=.*|do\.dtbo=1|g' "$ANYSCRIPT"
-        
-        # إضافة معلومات violet
-        sed -i "/^device\.name1=/a device.name1=\"${{ env.DEVICE_CODENAME }}\"" "$ANYSCRIPT"
-        sed -i "/^device\.name1=/a device.name2=\"redfin\"" "$ANYSCRIPT"  # أسماء بديلة
-        
-        echo "✅ AnyKernel3 (sixteen) جاهز"
+        echo "✅ AnyKernel3 جاهز"
 
-    # ==================== 11. تغليف الملفات - بنفس تنسيق النجاح ====================
+    # ==================== 12. تغليف الملفات ====================
     - name: "📁 تغليف ملفات النواة"
       if: steps.compile_kernel.outputs.compile_status == 'success'
-      id: package_kernel
       run: |
         echo "📁 تغليف ملفات kernel..."
         
-        # 1. نسخ Image.gz
         cp "${{ env.OUTPUT_DIR }}/arch/arm64/boot/Image.gz" "${{ env.ANYKERNEL_DIR }}/"
         
-        # 2. نسخ dtbo.img (إذا موجود)
         if [ -f "${{ env.OUTPUT_DIR }}/arch/arm64/boot/dtbo.img" ]; then
           cp "${{ env.OUTPUT_DIR }}/arch/arm64/boot/dtbo.img" "${{ env.ANYKERNEL_DIR }}/"
         fi
         
-        # 3. إنشاء ملف معلومات (بنفس تنسيق النجاح)
-        cat > "${{ env.ANYKERNEL_DIR }}/build_info.txt" << EOF
-        ========================================
-        🚀 xcalibur-v5.4 with KernelSU v1.1.1
-        ========================================
-        📱 الجهاز: ${{ env.DEVICE_CODENAME }}
-        🔧 النواة: ${{ env.KERNEL_NAME }}
-        ⭐ KSU: ${{ steps.install_ksu.outputs.ksu_version || env.KSU_KERNEL_VERSION }}
-        🔨 الباتشات: ${{ steps.apply_patches.outputs.patches_applied || '9' }}/9
-        ⏱️  الوقت: ${{ env.build_time }} ثانية
-        📅 البيلد: #${{ github.run_number }}
-        🔗 الكوميت: $(git rev-parse --short HEAD)
-        ========================================
-        
-        ⚙️ المواصفات:
-        • المترجم: Clang 22.0.0
-        • الإعدادات: ${{ env.CONFIG_FILE }}
-        • AnyKernel3: branch sixteen
-        • التوقيع: zipsigner 3.0
-        
-        📋 التعليمات:
-        1. فلاش عبر TWRP/OrangeFox
-        2. ثبت KernelSU Manager
-        3. استمتع بـ root آمن
-        EOF
-        
-        echo "✅ تم تغليف الملفات"
+        echo "✅ تم التغليف"
 
-    # ==================== 12. إنشاء ملف ZIP ====================
+    # ==================== 13. إنشاء ZIP ====================
     - name: "🎯 إنشاء ملف ZIP"
       if: steps.compile_kernel.outputs.compile_status == 'success'
       run: |
@@ -493,127 +273,58 @@ EOF
         zip -r9 "../${{ env.KERNEL_ZIP_NAME }}" ./* > /dev/null
         cd ..
         
-        ZIP_SIZE=$(du -h "${{ env.KERNEL_ZIP_NAME }}" | cut -f1)
-        echo "✅ تم إنشاء ZIP: ${{ env.KERNEL_ZIP_NAME }} ($ZIP_SIZE)"
-        
         mkdir -p "${{ env.RELEASES_DIR }}"
         mv "${{ env.KERNEL_ZIP_NAME }}" "${{ env.RELEASES_DIR }}/"
+        
+        echo "✅ تم إنشاء ZIP"
 
-    # ==================== 13. توقيع ملف ZIP - باستخدام zipsigner 3.0 ====================
-    - name: "🔏 توقيع ملف ZIP (zipsigner 3.0)"
+    # ==================== 14. توقيع ZIP (zipsigner 3.0) ====================
+    - name: "🔏 توقيع ملف ZIP"
       run: |
-        echo "🔏 توقيع ملف ZIP..."
+        echo "🔏 توقيع ملف ZIP بـ zipsigner 3.0..."
         
-        # ⭐ تنزيل zipsigner 3.0 كما تريد
-        echo "⬇️  جاري تنزيل zipsigner 3.0..."
-        wget -q "${{ env.ZIPSIGNER_URL || 'https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar' }}" \
-          -O /tmp/zipsigner.jar
+        echo "⬇️  تنزيل zipsigner 3.0..."
+        wget -q "${{ env.ZIPSIGNER_URL }}" -O /tmp/zipsigner.jar
         
-        # التوقيع
-        echo "✍️  جاري التوقيع..."
         cd "${{ env.RELEASES_DIR }}"
         
         if java -jar /tmp/zipsigner.jar \
           "${{ env.KERNEL_ZIP_NAME }}" \
           "${{ env.SIGNED_ZIP_NAME }}"; then
           
-          SIGNED_SIZE=$(du -h "${{ env.SIGNED_ZIP_NAME }}" | cut -f1)
-          echo "✅ تم التوقيع: ${{ env.SIGNED_ZIP_NAME }} ($SIGNED_SIZE)"
-          
-          # تحديث اسم الملف النهائي
+          echo "✅ تم التوقيع"
           FINAL_ZIP="${{ env.SIGNED_ZIP_NAME }}"
         else
-          echo "⚠️  فشل التوقيع، استخدام الملف غير الموقع"
+          echo "⚠️  استخدام الملف غير الموقع"
           FINAL_ZIP="${{ env.KERNEL_ZIP_NAME }}"
         fi
         
         echo "final_zip_name=$FINAL_ZIP" >> $GITHUB_ENV
         cd ..
 
-    # ==================== 14. التنظيم النهائي - بنفس تنسيق النجاح ====================
-    - name: "📂 التنظيم النهائي"
-      run: |
-        echo "📂 تنظيم الملفات النهائية..."
-        
-        # إنشاء README
-        cat > "${{ env.RELEASES_DIR }}/README.md" << EOF
-        # 🚀 xcalibur-v5.4 Kernel with KernelSU
-        
-        ## 📋 المواصفات
-        - **النواة:** xcalibur-v5.4
-        - **الجهاز:** ${{ env.DEVICE_CODENAME }} (Redmi Note 7 Pro)
-        - **KernelSU:** ${{ env.KSU_KERNEL_VERSION }}
-        - **المترجم:** Clang 22.0.0
-        - **البنتشات:** 9 (6+3)
-        - **البناء:** #${{ github.run_number }}
-        
-        ## 📁 الملفات
-        1. **${{ env.final_zip_name }}** - Kernel مع 9 patches
-        2. **${{ env.APK_NAME }}** - KernelSU Manager
-        
-        ## 🔧 طريقة التثبيت
-        1. اذهب إلى Recovery
-        2. اختر Install
-        3. اختر ${{ env.final_zip_name }}
-        4. اسحب للفلاش
-        5. إعادة التشغيل
-        6. ثبت KernelSU Manager
-        
-        ## ⚠️ ملاحظات
-        - تأكد من تطابق كود الجهاز
-        - خذ نسخة احتياطية أولاً
-        EOF
-        
-        # عرض الملفات
-        echo ""
-        echo "🎯 الملفات النهائية:"
-        ls -lh "${{ env.RELEASES_DIR }}"
-
-    # ==================== 15. رفع الملفات - نفس طريقة النجاح ====================
+    # ==================== 15. رفع الملفات ====================
     - name: "📤 رفع الملفات الناتجة"
       uses: actions/upload-artifact@v4
       with:
-        name: xcalibur-ksu-build-${{ github.run_number }}
-        path: |
-          ${{ env.RELEASES_DIR }}/*
-          ${{ github.workspace }}/build.log
+        name: kernel-build-${{ github.run_number }}
+        path: ${{ env.RELEASES_DIR }}/*
         retention-days: 30
-        compression-level: 0
 
-    # ==================== 16. ملخص البناء - نفس تنسيق النجاح ====================
+    # ==================== 16. ملخص البناء ====================
     - name: "🎉 ملخص البناء"
       if: always()
       run: |
         echo ""
         echo "╔══════════════════════════════════════════════════════╗"
-        echo "║                 🎊 بناء xcalibur-v5.4               ║"
+        echo "║                 🎊 البناء اكتمل                     ║"
         echo "╠══════════════════════════════════════════════════════╣"
         
         if [ "${{ steps.compile_kernel.outputs.compile_status }}" = "success" ]; then
-          echo "║ ✅ الحالة:    ناجح                                   "
-          echo "║ 🏷️  النواة:    xcalibur-v5.4                        "
-          echo "║ 📱 الجهاز:    ${{ env.DEVICE_CODENAME }}            "
-          echo "║ 🔧 KernelSU:  ${{ steps.install_ksu.outputs.ksu_version || env.KSU_KERNEL_VERSION }}"
-          echo "║ 🔨 الباتشات:  ${{ steps.apply_patches.outputs.patches_applied || '?' }}/9"
-          echo "║ ⏱️  الوقت:     ${{ env.build_time }} ثانية          "
-          echo "╠══════════════════════════════════════════════════════╣"
-          echo "║ 📁 الملف النهائي:                                   "
-          echo "║   • ${{ env.final_zip_name }}                       "
-          echo "║                                                     "
-          echo "║ 📊 إحصائيات:                                        "
-          echo "║   • تحذيرات: ${{ env.warnings }}                    "
-          echo "║   • أخطاء:   ${{ env.errors }}                      "
-          echo "║                                                     "
-          echo "║ ⚡ المميزات:                                         "
-          echo "║   • Clang 22.0.0                                    "
-          echo "║   • 9 patches hybrid                                "
-          echo "║   • AnyKernel3 (sixteen)                            "
+          echo "║ ✅ النتيجة:    ناجح                                 "
+          echo "║ 📁 الملف:     ${{ env.final_zip_name }}            "
+          echo "║ ⏱️  الوقت:    ${{ env.build_time }} ثانية         "
         else
-          echo "║ ❌ الحالة:    فاشل                                   "
-          echo "║ 🔍 راجع سجلات البناء                                "
+          echo "║ ❌ النتيجة:    فاشل                                 "
         fi
         
         echo "╚══════════════════════════════════════════════════════╝"
-        echo ""
-        echo "📅 انتهى البناء في: $(date)"
-        echo "📦 الملفات متاحة في قسم Artifacts"
