@@ -21,6 +21,14 @@ jobs:
         sudo apt-get install -y bc bison build-essential ccache curl flex \
         git libssl-dev libncurses5-dev lzop zip wget python3
         
+        # Create swap space to prevent memory issues
+        echo "💾 Creating 8GB swap space..."
+        sudo fallocate -l 8G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        echo "✅ Swap enabled: $(swapon --show)"
+        
     - name: ⚡ Setup ccache
       uses: hendrikmuhs/ccache-action@v1.2
       with:
