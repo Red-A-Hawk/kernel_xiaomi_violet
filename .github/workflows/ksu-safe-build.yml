@@ -1,0 +1,303 @@
+name: "Build Kernel with KernelSU Next v3.0.0"
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ sixteen-ksu ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    env:
+      KERNEL_NAME: "xcalibur-v5.4-violet-dynamic-ksu"
+      ARCH: "arm64"
+      CONFIG_FILE: "vendor/violet-perf_defconfig"
+      
+    steps:
+    # ==================== 📥 CHECKOUT ====================
+    - name: "📥 Checkout Kernel Source"
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    # ==================== 🧹 CLEAN SPACE ====================
+    - name: "🧹 Free Disk Space"
+      run: |
+        echo "Cleaning up space..."
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo apt-get clean
+        echo "Space freed"
+        df -h
+        
+    # ==================== 📦 DEPENDENCIES ====================
+    - name: "📦 Install Build Dependencies"
+      run: |
+        echo "Installing dependencies..."
+        sudo apt-get update
+        sudo apt-get install -y bc bison build-essential curl flex git libssl-dev libncurses5-dev lzop zip wget python3
+        echo "Dependencies installed"
+        
+    # ==================== 💾 SWAP ====================
+    - name: "💾 Setup 10GB Swap"
+      run: |
+        echo "Creating swap space..."
+        sudo swapoff -a
+        sudo dd if=/dev/zero of=/swapfile bs=1G count=10 status=progress
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        sudo sysctl vm.swappiness=100
+        echo "Swap configured"
+        free -h
+        
+    # ==================== 🔐 KERNELSU DRIVER ====================
+    - name: "🔐 Add KernelSU Driver"
+      run: |
+        echo "Adding KernelSU Next driver..."
+        
+        # Clone KernelSU driver repository
+        git clone --depth=1 https://github.com/KernelSU-Next/KernelSU.git --branch stable-1134 ksu-driver
+        
+        # Create directory for KSU in kernel
+        mkdir -p drivers/kernelsu
+        
+        # Copy KSU files
+        cp -rf ksu-driver/kernel/* drivers/kernelsu/
+        
+        # Clean up
+        rm -rf ksu-driver
+        
+        echo "KernelSU driver added"
+        
+    # ==================== 📦 KERNELSU APK ====================
+    - name: "📦 Download KernelSU APK"
+      run: |
+        echo "Downloading KernelSU Next APK v3.0.0..."
+        wget -q https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.0.0/KernelSU_Next_v3.0.0_32857-release.apk -O kernelsu.apk
+        
+        # Check if download was successful
+        if [ -f "kernelsu.apk" ]; then
+          APK_SIZE=$(stat -c%s kernelsu.apk)
+          echo "APK downloaded: $((APK_SIZE/1024/1024)) MB"
+        else
+          echo "APK download failed"
+        fi
+        
+    # ==================== 🔧 TOOLCHAIN ====================
+    - name: "🔧 Download ZyC Clang 15"
+      run: |
+        echo "Downloading ZyC Clang 15.0.7..."
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        
+        echo "Extracting toolchain..."
+        mkdir clang
+        tar -xf Clang-15.0.7-20251111.tar.gz -C clang/
+        rm Clang-15.0.7-20251111.tar.gz
+        
+        echo "Toolchain ready"
+        
+    # ==================== ⚙️ CONFIG ====================
+    - name: "⚙️ Setup Kernel Config"
+      run: |
+        echo "Setting up kernel configuration..."
+        
+        # Setup PATH for clang
+        export PATH="$(pwd)/clang/bin:$PATH"
+        export ARCH=arm64
+        
+        # Create output directory
+        mkdir -p out
+        
+        # Try to find the right defconfig
+        if make O=out vendor/violet-perf_defconfig 2>/dev/null; then
+          echo "Using vendor/violet-perf_defconfig"
+        elif make O=out violet-perf_defconfig 2>/dev/null; then
+          echo "Using violet-perf_defconfig"
+        elif make O=out violet_defconfig 2>/dev/null; then
+          echo "Using violet_defconfig"
+        else
+          echo "No defconfig found!"
+          ls arch/arm64/configs/ | grep violet
+          exit 1
+        fi
+        
+        # Add KernelSU config (SAFE WAY - no HEREDOC)
+        echo "CONFIG_KSU=y" >> out/.config
+        echo "CONFIG_KSU_NAME=\"KernelSU-Next\"" >> out/.config
+        echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
+        echo "CONFIG_KSU_DEBUG=n" >> out/.config
+        
+        # Update config with defaults
+        make O=out ARCH=arm64 olddefconfig
+        
+        echo "Configuration complete"
+        
+    # ==================== 🔨 COMPILE ====================
+    - name: "🔨 Compile Kernel"
+      id: compile
+      run: |
+        echo "Starting kernel compilation..."
+        
+        # Setup environment
+        export PATH="$(pwd)/clang/bin:$PATH"
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export KBUILD_BUILD_USER=Red-A-Hawk
+        export KBUILD_BUILD_HOST=GitHub-Actions
+        
+        START_TIME=$(date +%s)
+        
+        echo "Build start: $(date)"
+        echo "Free memory:"
+        free -h
+        
+        # Compile with all processors
+        make -j$(nproc --all) O=out \
+          ARCH=arm64 \
+          SUBARCH=arm64 \
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          2>&1 | tee build.log
+        
+        BUILD_STATUS=$?
+        
+        END_TIME=$(date +%s)
+        BUILD_SECONDS=$((END_TIME - START_TIME))
+        BUILD_MINUTES=$((BUILD_SECONDS / 60))
+        BUILD_REMAINING_SECONDS=$((BUILD_SECONDS % 60))
+        
+        echo "Build end: $(date)"
+        echo "Build duration: ${BUILD_MINUTES}m ${BUILD_REMAINING_SECONDS}s"
+        echo "Free memory after build:"
+        free -h
+        
+        if [ $BUILD_STATUS -ne 0 ]; then
+          echo "Build failed with code $BUILD_STATUS"
+          exit $BUILD_STATUS
+        fi
+        
+        echo "BUILD_TIME=${BUILD_MINUTES}m ${BUILD_REMAINING_SECONDS}s" >> $GITHUB_ENV
+        echo "COMPILE_STATUS=success" >> $GITHUB_ENV
+        
+    # ==================== ✅ VERIFY ====================
+    - name: "✅ Verify Build Files"
+      id: verify
+      run: |
+        echo "Verifying build output..."
+        
+        # Check required files
+        IMAGE_FILE="out/arch/arm64/boot/Image.gz"
+        DTBO_FILE="out/arch/arm64/boot/dtbo.img"
+        
+        FILES_FOUND=0
+        FILES_MISSING=0
+        
+        if [ -f "$IMAGE_FILE" ]; then
+          echo "✅ Image.gz found: $(du -h $IMAGE_FILE | cut -f1)"
+          FILES_FOUND=$((FILES_FOUND + 1))
+        else
+          echo "❌ Image.gz missing"
+          FILES_MISSING=$((FILES_MISSING + 1))
+        fi
+        
+        if [ -f "$DTBO_FILE" ]; then
+          echo "✅ dtbo.img found: $(du -h $DTBO_FILE | cut -f1)"
+          FILES_FOUND=$((FILES_FOUND + 1))
+        else
+          echo "❌ dtbo.img missing"
+          FILES_MISSING=$((FILES_MISSING + 1))
+        fi
+        
+        if [ -f "kernelsu.apk" ]; then
+          echo "✅ KernelSU APK found"
+          FILES_FOUND=$((FILES_FOUND + 1))
+        fi
+        
+        if [ $FILES_MISSING -eq 0 ]; then
+          echo "VERIFY_STATUS=success" >> $GITHUB_OUTPUT
+          echo "All required files found"
+        else
+          echo "VERIFY_STATUS=failed" >> $GITHUB_OUTPUT
+          echo "Missing $FILES_MISSING files"
+          echo "Total files found: $FILES_FOUND"
+        fi
+        
+    # ==================== 📦 PACKAGE ====================
+    - name: "📦 Create Flashable ZIP"
+      if: steps.verify.outputs.VERIFY_STATUS == 'success'
+      run: |
+        echo "Creating flashable ZIP package..."
+        
+        # Clone AnyKernel3
+        git clone --quiet https://github.com/osm0sis/AnyKernel3 ak3
+        
+        # Copy kernel files
+        cp out/arch/arm64/boot/Image.gz ak3/
+        cp out/arch/arm64/boot/dtbo.img ak3/
+        
+        # Copy KernelSU APK if exists
+        if [ -f "kernelsu.apk" ]; then
+          mkdir -p ak3/apk
+          cp kernelsu.apk ak3/apk/KernelSU_Next_v3.0.0.apk
+        fi
+        
+        # Create build info file
+        echo "Kernel: ${{ env.KERNEL_NAME }}" > ak3/build_info.txt
+        echo "KSU: Next v3.0.0" >> ak3/build_info.txt
+        echo "Build: #${{ github.run_number }}" >> ak3/build_info.txt
+        echo "Date: $(date)" >> ak3/build_info.txt
+        echo "Time: ${{ env.BUILD_TIME }}" >> ak3/build_info.txt
+        
+        # Create ZIP
+        cd ak3
+        ZIP_FILE="xcalibur-ksu-next-${{ github.run_number }}.zip"
+        zip -r9 "../$ZIP_FILE" * -x .git README.md .gitignore > /dev/null
+        cd ..
+        
+        # Show ZIP info
+        ZIP_SIZE=$(stat -c%s "$ZIP_FILE")
+        echo "ZIP created: $ZIP_FILE"
+        echo "ZIP size: $((ZIP_SIZE/1024/1024)) MB"
+        
+    # ==================== 📤 UPLOAD ====================
+    - name: "📤 Upload Kernel ZIP"
+      if: steps.verify.outputs.VERIFY_STATUS == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-build-${{ github.run_number }}
+        path: xcalibur-ksu-next-${{ github.run_number }}.zip
+        retention-days: 30
+        
+    - name: "📤 Upload Build Log"
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log-${{ github.run_number }}
+        path: build.log
+        retention-days: 7
+        
+    # ==================== 📊 SUMMARY ====================
+    - name: "📊 Build Summary"
+      run: |
+        echo "### 🚀 Build Summary" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.verify.outputs.VERIFY_STATUS }}" == "success" ]; then
+          echo "✅ **BUILD SUCCESSFUL**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Kernel:** ${{ env.KERNEL_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**KernelSU:** Next v3.0.0 (no-GKI)" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Time:** ${{ env.BUILD_TIME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**ZIP:** xcalibur-ksu-next-${{ github.run_number }}.zip" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Download from Artifacts**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **BUILD FAILED**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the build log for details" >> $GITHUB_STEP_SUMMARY
+        fi
