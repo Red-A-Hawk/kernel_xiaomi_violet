@@ -1,0 +1,60 @@
+name: Build Ultimate - Working
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Setup
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc bison build-essential curl flex git \
+        libssl-dev libncurses5-dev lzop zip wget python3
+        
+        # Swap
+        sudo fallocate -l 8G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        
+    - name: KernelSU
+      run: |
+        git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU
+        
+    - name: Clang
+      run: |
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        mkdir clang && tar -xf Clang-*.tar.gz -C clang/ && rm Clang-*.tar.gz
+        
+    - name: Config
+      run: |
+        export PATH="$(pwd)/clang/bin:$PATH"
+        export ARCH=arm64
+        make O=out violet_defconfig || make O=out vendor/violet-perf_defconfig
+        
+    - name: Build
+      run: |
+        export PATH="$(pwd)/clang/bin:$PATH"
+        make -j$(nproc) O=out ARCH=arm64 \
+          CC=clang \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          
+    - name: Package
+      run: |
+        git clone https://github.com/Joker-V2/AnyKernel3 -b sixteen AK3
+        cp out/arch/arm64/boot/Image.gz AK3/
+        cp out/arch/arm64/boot/dtbo.img AK3/ 2>/dev/null || true
+        cd AK3 && zip -r9 ../kernel.zip * && cd ..
+        
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-${{ github.run_number }}
+        path: kernel.zip
