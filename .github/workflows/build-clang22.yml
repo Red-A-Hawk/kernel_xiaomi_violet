@@ -133,7 +133,7 @@ jobs:
     - name: "⚙️ Generate Kernel Config"
       run: |
         export PATH="$(pwd)/clang/bin:$PATH"
-        export ARCH=${{ env.ARCH }}
+        export ARCH="${{ env.ARCH }}"
         
         echo "⚙️ Trying defconfig options (SAME as successful)..."
         
@@ -158,10 +158,10 @@ jobs:
       id: compile_kernel
       run: |
         export PATH="$(pwd)/clang/bin:$PATH"
-        export ARCH=${{ env.ARCH }}
-        export SUBARCH=${{ env.SUBARCH }}
-        export KBUILD_BUILD_USER=${{ env.KBUILD_BUILD_USER }}
-        export KBUILD_BUILD_HOST=${{ env.KBUILD_BUILD_HOST }}
+        export ARCH="${{ env.ARCH }}"
+        export SUBARCH="${{ env.SUBARCH }}"
+        export KBUILD_BUILD_USER="${{ env.KBUILD_BUILD_USER }}"
+        export KBUILD_BUILD_HOST="${{ env.KBUILD_BUILD_HOST }}"
         
         echo "🔨 Starting kernel compilation with Clang 22..."
         echo "⏰ Start time: $(date)"
@@ -172,12 +172,12 @@ jobs:
         
         # ⭐⭐ نفس إعدادات التجميع الناجحة، فقط المترجم مختلف
         make -j$(nproc --all) O=out \
-          ARCH=${{ env.ARCH }} \
-          SUBARCH=${{ env.SUBARCH }} \
+          ARCH="${{ env.ARCH }}" \
+          SUBARCH="${{ env.SUBARCH }}" \
           CC=clang \
-          CLANG_TRIPLE=${{ env.CLANG_TRIPLE }} \
-          CROSS_COMPILE=${{ env.CROSS_COMPILE }} \
-          CROSS_COMPILE_ARM32=${{ env.CROSS_COMPILE_ARM32 }} \
+          CLANG_TRIPLE="${{ env.CLANG_TRIPLE }}" \
+          CROSS_COMPILE="${{ env.CROSS_COMPILE }}" \
+          CROSS_COMPILE_ARM32="${{ env.CROSS_COMPILE_ARM32 }}" \
           2>&1 | tee build.log
         
         BUILD_STATUS=$?
@@ -312,7 +312,7 @@ jobs:
         echo "- **Build Time:** ${{ env.BUILD_TIME }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [ "${{ steps.check.outputs.success }}" == "true" ]; then
+        if [[ "${{ steps.check.outputs.success }}" == "true" ]]; then
           echo "### ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "🎉 Your kernel with Clang 22 is ready!" >> $GITHUB_STEP_SUMMARY
