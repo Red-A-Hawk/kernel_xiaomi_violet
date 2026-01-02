@@ -33,7 +33,26 @@ jobs:
       uses: hendrikmuhs/ccache-action@v1.2
       with:
         key: violet-kernelsu-next
-        max-size: 2G
+        max-size: 500M
+        
+    - name: 💾 Increase Swap & Optimize Memory
+      run: |
+        # Disable existing swap
+        sudo swapoff -a
+        
+        # Create 10GB swap
+        sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        
+        # Check memory
+        echo "📊 Memory status:"
+        free -h
+        
+        # Optimize kernel memory settings
+        sudo sysctl -w vm.swappiness=100
+        sudo sysctl -w vm.vfs_cache_pressure=50
         
     - name: 🔐 Add KernelSU Next (Non-GKI v3.0.0)
       run: |
