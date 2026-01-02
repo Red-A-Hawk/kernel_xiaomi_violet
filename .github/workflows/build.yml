@@ -1,99 +1,158 @@
-name: "🚀 Build Kernel with KernelSU"
+name: "🚀 Build Kernel for Violet with KernelSU"
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
-
-env:
-  KERNEL_NAME: "xcalibur-v5.4-violet-dynamic-ksu"
-  ARCH: "arm64"
-  CONFIG_FILE: "vendor/violet-perf_defconfig"
+    branches: [ sixteen-ksu ]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
     
     steps:
-    # 1. Get source
-    - name: "📥 Checkout"
+    # ==================== 📥 1. GET KERNEL SOURCE ====================
+    - name: "📥 Checkout Kernel Source"
       uses: actions/checkout@v4
       with:
         submodules: recursive
-
-    # 2. Install deps
-    - name: "📦 Install dependencies"
+        
+    # ==================== 🧹 2. FREE DISK SPACE ====================
+    - name: "🧹 Free Disk Space"
       run: |
+        echo "🧹 Cleaning up space..."
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo apt-get clean
+        echo "✅ Space freed"
+        df -h
+        
+    # ==================== 📦 3. INSTALL BUILD DEPENDENCIES ====================
+    - name: "📦 Install Build Dependencies"
+      run: |
+        echo "📦 Installing dependencies..."
         sudo apt-get update
-        sudo apt-get install -y bc bison build-essential ccache flex git libssl-dev make wget
-
-    # 3. Setup swap
-    - name: "💾 Setup swap"
+        sudo apt-get install -y \
+          bc bison build-essential ccache curl flex \
+          gcc-aarch64-linux-gnu git libssl-dev libncurses5-dev \
+          lzop make python3 wget zip file binutils
+        echo "✅ Dependencies installed"
+        
+    # ==================== 💾 4. SETUP 10GB SWAP ====================
+    - name: "💾 Setup 10GB Swap"
       run: |
+        echo "💾 Creating swap space..."
+        sudo swapoff -a 2>/dev/null || true
         sudo fallocate -l 10G /swapfile
         sudo chmod 600 /swapfile
         sudo mkswap /swapfile
         sudo swapon /swapfile
-
-    # 4. Get toolchain
-    - name: "🔧 Get toolchain"
-      run: |
-        wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
-        mkdir clang
-        tar -xf Clang-15.0.7-20251111.tar.gz -C clang/
-        echo "$(pwd)/clang/bin" >> $GITHUB_PATH
-
-    # 5. Simple KernelSU integration
-    - name: "⭐ Add KernelSU"
-      run: |
-        echo "Adding KernelSU..."
-        mkdir -p drivers/kernelsu
+        sudo sysctl vm.swappiness=100
+        echo "✅ Swap configured:"
+        free -h
+        swapon --show
         
-        # Download basic files
-        cat > drivers/kernelsu/core.c << 'EOF'
-#include <linux/module.h>
-MODULE_LICENSE("GPL");
-int init_module(void) { printk("KernelSU loaded\n"); return 0; }
-void cleanup_module(void) { printk("KernelSU unloaded\n"); }
-EOF
+    # ==================== ⭐ 5. ADD KERNELSU (ORIGINAL, NOT NEXT) ====================
+    - name: "⭐ Add KernelSU for Non-GKI Kernel"
+      id: add_ksu
+      run: |
+        echo "========================================"
+        echo "  ADDING KERNELSU TO KERNEL"
+        echo "========================================"
         
-        cat > drivers/kernelsu/Makefile << 'EOF'
-obj-y += core.o
-EOF
+        # 1. Remove any existing KernelSU
+        rm -rf drivers/kernelsu 2>/dev/null || true
         
-        cat > drivers/kernelsu/Kconfig << 'EOF'
-config KSU
-	bool "KernelSU"
-	default y
-EOF
-
-    # 6. Configure kernel
-    - name: "⚙️ Configure"
-      run: |
-        mkdir -p out
-        make O=out ARCH=arm64 ${{ env.CONFIG_FILE }}
-        echo "CONFIG_KSU=y" >> out/.config
-        make O=out ARCH=arm64 olddefconfig
-
-    # 7. Build kernel
-    - name: "🔨 Build"
-      run: |
-        make -j$(nproc) O=out ARCH=arm64 CC="clang" CROSS_COMPILE="aarch64-linux-gnu-" 2>&1 | tee build.log
-
-    # 8. Check build
-    - name: "✅ Check"
-      run: |
-        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
-          echo "✅ Build successful"
-        else
-          echo "❌ Build failed"
+        # 2. Download original KernelSU (not Next)
+        echo "Downloading KernelSU v0.9.4 (for non-GKI)..."
+        KSU_URL="https://github.com/tiann/KernelSU/archive/refs/tags/v0.9.4.tar.gz"
+        wget -q "$KSU_URL" -O kernelsu.tar.gz
+        
+        if [ ! -f "kernelsu.tar.gz" ]; then
+          echo "❌ Failed to download KernelSU"
           exit 1
         fi
-
-    # 9. Create zip
-    - name: "📦 Package"
+        
+        # 3. Extract and integrate
+        echo "Integrating KernelSU into kernel source..."
+        mkdir -p drivers/kernelsu
+        tar -xf kernelsu.tar.gz --strip-components=1 -C drivers/kernelsu/
+        rm -f kernelsu.tar.gz
+        
+        # 4. Verify core files exist
+        if [ ! -f "drivers/kernelsu/core.c" ]; then
+          echo "❌ KernelSU core.c not found!"
+          exit 1
+        fi
+        
+        # 5. Add to Kconfig
+        echo 'Adding KernelSU to Kconfig...'
+        if ! grep -q "kernelsu" drivers/Kconfig; then
+          echo '' >> drivers/Kconfig
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+        fi
+        
+        # 6. Add to Makefile
+        echo 'Adding KernelSU to Makefile...'
+        if ! grep -q "kernelsu" drivers/Makefile; then
+          echo '' >> drivers/Makefile
+          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+        fi
+        
+        echo "✅ KernelSU successfully integrated"
+        echo "Files in drivers/kernelsu/:"
+        ls -la drivers/kernelsu/
+        
+    # ==================== 🔧 6. DOWNLOAD ZyC CLANG 15.0.7 ====================
+    - name: "🔧 Download ZyC Clang 15.0.7"
       run: |
-        git clone https://github.com/osm0sis/AnyKernel3
-        cp out/arch/arm64/boot/Image.gz AnyKernel3/
-        cd AnyKernel3
-        zip -r9 ../kernel.zip *
+        echo "📥 Downloading ZyC Clang 15.0.7..."
+        wget -q --show-progress \
+          https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        
+        echo "📂 Extracting toolchain..."
+        mkdir -p clang
+        tar -xf Clang-15.0.7-20251111.tar.gz -C clang/
+        rm -f Clang-15.0.7-20251111.tar.gz
+        
+        # Add to PATH
+        echo "$(pwd)/clang/bin" >> $GITHUB_PATH
+        
+        echo "✅ ZyC Clang ready"
+        echo "📋 Version:"
+        ./clang/bin/clang --version | head -3
+        
+    # ==================== ⚙️ 7. GENERATE KERNEL CONFIG WITH KSU ====================
+    - name: "⚙️ Generate Kernel Config with KSU"
+      id: kernel_config
+      run: |
+        export PATH="$(pwd)/clang/bin:$PATH"
+        export ARCH=arm64
+        
+        echo "⚙️ Generating kernel configuration..."
+        
+        # Create output directory
+        mkdir -p out
+        
+        # Try multiple defconfigs
+        echo "Trying defconfig options..."
+        
+        if make O=out vendor/violet-perf_defconfig 2>/dev/null; then
+          echo "✅ Using vendor/violet-perf_defconfig"
+          CONFIG_USED="vendor/violet-perf_defconfig"
+        elif make O=out violet-perf_defconfig 2>/dev/null; then
+          echo "✅ Using violet-perf_defconfig"
+          CONFIG_USED="violet-perf_defconfig"
+        elif make O=out violet_defconfig 2>/dev/null; then
+          echo "✅ Using violet_defconfig"
+          CONFIG_USED="violet_defconfig"
+        else
+          echo "❌ No valid defconfig found!"
+          echo "Available configs:"
+          ls arch/arm64/configs/ | grep -i violet || true
+          exit 1
+        fi
+        
+        # Add KernelSU configuration
+        echo ""
+        echo "Adding KernelSU configuration..."
+        echo "" >> out
