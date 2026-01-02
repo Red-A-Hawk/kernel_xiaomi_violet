@@ -1,4 +1,4 @@
-name: "🚀 Build Kernel for Violet with KernelSU"
+name: "Build Kernel for Violet with KernelSU"
 
 on:
   workflow_dispatch:
@@ -49,110 +49,161 @@ jobs:
         sudo sysctl vm.swappiness=100
         echo "✅ Swap configured:"
         free -h
-        swapon --show
         
-    # ==================== ⭐ 5. ADD KERNELSU (ORIGINAL, NOT NEXT) ====================
+    # ==================== ⭐ 5. ADD KERNELSU (ORIGINAL FOR NON-GKI) ====================
     - name: "⭐ Add KernelSU for Non-GKI Kernel"
-      id: add_ksu
       run: |
-        echo "========================================"
-        echo "  ADDING KERNELSU TO KERNEL"
-        echo "========================================"
+        echo "Adding KernelSU v0.9.4..."
         
-        # 1. Remove any existing KernelSU
+        # Remove any existing
         rm -rf drivers/kernelsu 2>/dev/null || true
         
-        # 2. Download original KernelSU (not Next)
-        echo "Downloading KernelSU v0.9.4 (for non-GKI)..."
-        KSU_URL="https://github.com/tiann/KernelSU/archive/refs/tags/v0.9.4.tar.gz"
-        wget -q "$KSU_URL" -O kernelsu.tar.gz
+        # Download KernelSU
+        wget -q "https://github.com/tiann/KernelSU/archive/refs/tags/v0.9.4.tar.gz" -O kernelsu.tar.gz
         
-        if [ ! -f "kernelsu.tar.gz" ]; then
-          echo "❌ Failed to download KernelSU"
-          exit 1
-        fi
-        
-        # 3. Extract and integrate
-        echo "Integrating KernelSU into kernel source..."
+        # Extract
         mkdir -p drivers/kernelsu
         tar -xf kernelsu.tar.gz --strip-components=1 -C drivers/kernelsu/
         rm -f kernelsu.tar.gz
         
-        # 4. Verify core files exist
-        if [ ! -f "drivers/kernelsu/core.c" ]; then
-          echo "❌ KernelSU core.c not found!"
-          exit 1
-        fi
+        # Add to Kconfig
+        echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
         
-        # 5. Add to Kconfig
-        echo 'Adding KernelSU to Kconfig...'
-        if ! grep -q "kernelsu" drivers/Kconfig; then
-          echo '' >> drivers/Kconfig
-          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-        fi
+        # Add to Makefile
+        echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
         
-        # 6. Add to Makefile
-        echo 'Adding KernelSU to Makefile...'
-        if ! grep -q "kernelsu" drivers/Makefile; then
-          echo '' >> drivers/Makefile
-          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-        fi
-        
-        echo "✅ KernelSU successfully integrated"
-        echo "Files in drivers/kernelsu/:"
-        ls -la drivers/kernelsu/
+        echo "✅ KernelSU added"
         
     # ==================== 🔧 6. DOWNLOAD ZyC CLANG 15.0.7 ====================
     - name: "🔧 Download ZyC Clang 15.0.7"
       run: |
         echo "📥 Downloading ZyC Clang 15.0.7..."
-        wget -q --show-progress \
-          https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        wget -q --show-progress https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
         
-        echo "📂 Extracting toolchain..."
-        mkdir -p clang
+        echo "📂 Extracting..."
+        mkdir clang
         tar -xf Clang-15.0.7-20251111.tar.gz -C clang/
-        rm -f Clang-15.0.7-20251111.tar.gz
+        rm Clang-15.0.7-20251111.tar.gz
         
-        # Add to PATH
         echo "$(pwd)/clang/bin" >> $GITHUB_PATH
-        
         echo "✅ ZyC Clang ready"
-        echo "📋 Version:"
-        ./clang/bin/clang --version | head -3
         
-    # ==================== ⚙️ 7. GENERATE KERNEL CONFIG WITH KSU ====================
+    # ==================== ⚙️ 7. GENERATE KERNEL CONFIG ====================
     - name: "⚙️ Generate Kernel Config with KSU"
-      id: kernel_config
       run: |
         export PATH="$(pwd)/clang/bin:$PATH"
         export ARCH=arm64
         
-        echo "⚙️ Generating kernel configuration..."
-        
-        # Create output directory
+        echo "Generating kernel config..."
         mkdir -p out
         
-        # Try multiple defconfigs
-        echo "Trying defconfig options..."
-        
+        # Try defconfigs
         if make O=out vendor/violet-perf_defconfig 2>/dev/null; then
           echo "✅ Using vendor/violet-perf_defconfig"
-          CONFIG_USED="vendor/violet-perf_defconfig"
         elif make O=out violet-perf_defconfig 2>/dev/null; then
           echo "✅ Using violet-perf_defconfig"
-          CONFIG_USED="violet-perf_defconfig"
         elif make O=out violet_defconfig 2>/dev/null; then
           echo "✅ Using violet_defconfig"
-          CONFIG_USED="violet_defconfig"
         else
-          echo "❌ No valid defconfig found!"
-          echo "Available configs:"
-          ls arch/arm64/configs/ | grep -i violet || true
+          echo "❌ No defconfig found"
           exit 1
         fi
         
-        # Add KernelSU configuration
-        echo ""
-        echo "Adding KernelSU configuration..."
-        echo "" >> out
+        # Add KernelSU config
+        echo "CONFIG_KSU=y" >> out/.config
+        echo 'CONFIG_KSU_NAME="KSU"' >> out/.config
+        make O=out ARCH=arm64 olddefconfig
+        
+        echo "✅ Config generated"
+        
+    # ==================== 🔨 8. COMPILE KERNEL ====================
+    - name: "🔨 Compile Kernel"
+      run: |
+        export PATH="$(pwd)/clang/bin:$PATH"
+        export ARCH=arm64
+        
+        echo "Compiling kernel..."
+        START=$(date +%s)
+        
+        make -j$(nproc --all) O=out ARCH=arm64 CC="clang" CROSS_COMPILE="aarch64-linux-gnu-" 2>&1 | tee build.log
+        
+        END=$(date +%s)
+        DIFF=$((END - START))
+        echo "BUILD_TIME=$((DIFF / 60))m $((DIFF % 60))s" >> $GITHUB_ENV
+        
+        if tail -5 build.log | grep -q "Error"; then
+          echo "❌ Build failed"
+          exit 1
+        else
+          echo "✅ Build completed in ${DIFF}s"
+        fi
+        
+    # ==================== ✔️ 9. VERIFY BUILD ====================
+    - name: "✔️ Verify Build"
+      id: check
+      run: |
+        echo "Checking build..."
+        
+        if [[ -f "out/arch/arm64/boot/Image.gz" && -f "out/arch/arm64/boot/dtbo.img" ]]; then
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "✅ Build successful"
+        else
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "❌ Build failed"
+          exit 1
+        fi
+        
+    # ==================== 📦 10. CREATE ZIP WITH ANYKERNEL3 (sixteen branch) ====================
+    - name: "📦 Create Flashable ZIP"
+      if: steps.check.outputs.success == 'true'
+      run: |
+        echo "Creating flashable ZIP..."
+        
+        # Clone AnyKernel3 from sixteen branch
+        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3 -b sixteen AK3
+        
+        # Copy kernel files
+        cp out/arch/arm64/boot/Image.gz AK3/
+        cp out/arch/arm64/boot/dtbo.img AK3/
+        
+        # Create ZIP
+        cd AK3
+        ZIPNAME="Violet-KSU-$(date +%Y%m%d-%H%M).zip"
+        zip -r9 ../$ZIPNAME * -x .git README.md .gitignore
+        cd ..
+        
+        echo "✅ Created: $ZIPNAME"
+        
+    # ==================== 📤 11. UPLOAD ARTIFACT ====================
+    - name: "📤 Upload Kernel ZIP"
+      if: steps.check.outputs.success == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: Violet-KSU-Kernel
+        path: Violet-KSU-*.zip
+        retention-days: 30
+        
+    # ==================== 📤 12. UPLOAD LOG ====================
+    - name: "📤 Upload Build Log"
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Build-Log
+        path: build.log
+        retention-days: 7
+        
+    # ==================== 📊 13. BUILD SUMMARY ====================
+    - name: "📊 Build Summary"
+      if: always()
+      run: |
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ steps.check.outputs.success }}" == "true" ]; then
+          echo "### ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "Kernel with KernelSU v0.9.4 is ready!" >> $GITHUB_STEP_SUMMARY
+          echo "Built with: ZyC Clang 15.0.7" >> $GITHUB_STEP_SUMMARY
+          echo "AnyKernel3: sixteen branch" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ❌ Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Check build log for details" >> $GITHUB_STEP_SUMMARY
+        fi
