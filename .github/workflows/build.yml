@@ -99,15 +99,50 @@ jobs:
         export KBUILD_BUILD_USER=Red-A-Hawk
         export KBUILD_BUILD_HOST=GitHub-Actions
         
-        # Fix for LLVM Broken Pipe error
-        export KCFLAGS="-w"
+        # Disable warnings and optimize for memory
+        export KCFLAGS="-w -Wno-error"
         export KCPPFLAGS="-w"
+        export KBUILD_CFLAGS="-w"
+        
+        # Disable LTO if enabled (causes memory issues)
+        scripts/config --file out/.config -d LTO_CLANG -d LTO_CLANG_THIN -d LTO_CLANG_FULL
         
         START=$(date +%s)
         echo "🔨 Building kernel with KernelSU Next..."
+        echo "💾 Memory before build:"
+        free -h
         
-        # Reduce parallel jobs to avoid memory issues
-        JOBS=$(($(nproc) - 1))
+        # Use only 2 jobs to reduce memory pressure
+        make -j2 O=out \
+          ARCH=arm64 \
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          V=1 \
+          2>&1 | tee build.log || {
+            echo "❌ Build failed, trying with -j1..."
+            make -j1 O=out \
+              ARCH=arm64 \
+              CC=clang \
+              CLANG_TRIPLE=aarch64-linux-gnu- \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+              LLVM=1 \
+              LLVM_IAS=1 \
+              V=1 \
+              2>&1 | tee -a build.log
+          }
+        
+        END=$(date +%s)
+        DIFF=$((END - START))
+        echo "⏱️ Build completed in $((DIFF / 60))m $((DIFF % 60))s"
+        echo "BUILD_TIME=$((DIFF / 60))m $((DIFF % 60))s" >> $GITHUB_ENV
+        
+        echo "💾 Memory after build:"
+        free -h))
         [ $JOBS -lt 2 ] && JOBS=2
         
         make -j${JOBS} O=out \
