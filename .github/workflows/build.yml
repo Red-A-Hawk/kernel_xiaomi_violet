@@ -1,4 +1,4 @@
-name: "🚀 Build Kernel for Violet with KernelSU"
+name: Build Kernel - ZyC Clang 15
 
 on:
   workflow_dispatch:
@@ -8,121 +8,89 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
     
     steps:
-    # ==================== 📥 1. GET KERNEL SOURCE ====================
-    - name: "📥 Checkout Kernel Source"
+    - name: 📥 Checkout Kernel Source
       uses: actions/checkout@v4
       with:
         submodules: recursive
         
-    # ==================== 🧹 2. FREE DISK SPACE ====================
-    - name: "🧹 Free Disk Space"
+    - name: 🧹 Free Disk Space
       run: |
         echo "🧹 Cleaning up space..."
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
         sudo apt-get clean
         echo "✅ Space freed"
+        df -h
         
-    # ==================== 📦 3. INSTALL BUILD DEPENDENCIES ====================
-    - name: "📦 Install Build Dependencies"
+    - name: 🔧 Install Build Dependencies
       run: |
         echo "📦 Installing dependencies..."
         sudo apt-get update
-        sudo apt-get install -y \
-          bc bison build-essential ccache curl flex \
-          gcc-aarch64-linux-gnu git libssl-dev libncurses5-dev \
-          lzop make python3 wget zip file binutils default-jre
+        sudo apt-get install -y bc bison build-essential curl flex \
+        git libssl-dev libncurses5-dev lzop zip wget python3 default-jre
         echo "✅ Dependencies installed"
         
-    # ==================== 💾 4. SETUP 10GB SWAP ====================
-    - name: "💾 Setup 10GB Swap"
+    - name: 💾 Setup 10GB Swap
       run: |
         echo "💾 Creating swap space..."
-        sudo swapoff -a 2>/dev/null || true
-        sudo fallocate -l 10G /swapfile
+        sudo swapoff -a
+        sudo dd if=/dev/zero of=/swapfile bs=1G count=10 status=progress
         sudo chmod 600 /swapfile
         sudo mkswap /swapfile
         sudo swapon /swapfile
         sudo sysctl vm.swappiness=100
-        echo "✅ Swap configured"
+        echo "✅ Swap configured:"
+        free -h
+        swapon --show
         
-    # ==================== ⭐ 5. ADD KERNELSU FOR NON-GKI KERNEL ====================
-    - name: "⭐ Add KernelSU for Non-GKI Kernel"
+    - name: 🔐 ✅ FIXED: Add KernelSU CORRECTLY
       run: |
-        echo "========================================"
-        echo "  ADDING KERNELSU v0.9.4"
-        echo "========================================"
+        echo "📥 Adding KernelSU v0.9.4 (non-GKI)..."
         
-        # Clean existing
-        rm -rf drivers/kernelsu 2>/dev/null || true
+        # 1. Download KernelSU العادي (ليس Next)
+        git clone --depth=1 https://github.com/tiann/KernelSU --branch main KernelSU
         
-        # Download KernelSU
-        echo "Downloading KernelSU v0.9.4..."
-        wget -q "https://github.com/tiann/KernelSU/archive/refs/tags/v0.9.4.tar.gz" -O kernelsu.tar.gz
-        
-        if [ ! -f "kernelsu.tar.gz" ]; then
-          echo "❌ Failed to download KernelSU"
-          exit 1
-        fi
-        
-        # Extract
-        echo "Extracting KernelSU..."
+        # 2. انسخ الملفات إلى drivers/kernelsu/
         mkdir -p drivers/kernelsu
-        tar -xf kernelsu.tar.gz --strip-components=1 -C drivers/kernelsu/
-        rm -f kernelsu.tar.gz
+        cp -rf KernelSU/kernel/* drivers/kernelsu/
         
-        # Verify files
-        if [ ! -f "drivers/kernelsu/core.c" ]; then
-          echo "❌ KernelSU files not found!"
-          exit 1
-        fi
+        # 3. أضف إلى Kconfig (مهم!)
+        echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
         
-        # Add to Kconfig
-        echo 'Adding to Kconfig...'
-        if ! grep -q "kernelsu" drivers/Kconfig; then
-          echo '' >> drivers/Kconfig
-          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
-        fi
+        # 4. أضف إلى Makefile (مهم!)
+        echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
         
-        # Add to Makefile
-        echo 'Adding to Makefile...'
-        if ! grep -q "kernelsu" drivers/Makefile; then
-          echo '' >> drivers/Makefile
-          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-        fi
+        echo "✅ KernelSU added CORRECTLY"
+        ls -la drivers/kernelsu/
         
-        echo "✅ KernelSU integrated successfully"
-        echo "Files: $(ls drivers/kernelsu/ | wc -l) files"
-        
-    # ==================== 🔧 6. DOWNLOAD ZyC CLANG 15.0.7 ====================
-    - name: "🔧 Download ZyC Clang 15.0.7"
+    - name: 📦 Download ZyC Clang 15.0.7
       run: |
-        echo "📥 Downloading ZyC Clang 15.0.7..."
-        wget -q --show-progress \
-          https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        echo "📥 Downloading ZyC Clang 15.0.7 (11 Nov 2024)..."
+        wget -q --show-progress https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
         
-        echo "📂 Extracting toolchain..."
-        mkdir -p clang
+        echo "📂 Extracting..."
+        mkdir clang
         tar -xf Clang-15.0.7-20251111.tar.gz -C clang/
         rm Clang-15.0.7-20251111.tar.gz
         
-        echo "$(pwd)/clang/bin" >> $GITHUB_PATH
-        echo "✅ ZyC Clang ready"
+        echo "✅ ZyC Clang 15.0.7 ready"
+        echo "📋 Clang version:"
+        ./clang/bin/clang --version
         
-    # ==================== ⚙️ 7. GENERATE KERNEL CONFIG ====================
-    - name: "⚙️ Generate Kernel Config"
+    - name: ⚙️ ✅ FIXED: Generate Kernel Config WITH KSU
       run: |
         export PATH="$(pwd)/clang/bin:$PATH"
         export ARCH=arm64
         
-        echo "Generating kernel configuration..."
+        echo "⚙️ Trying defconfig options..."
+        
+        # إنشاء مجلد out
         mkdir -p out
         
-        echo "Trying defconfig options..."
-        
-        # Try multiple defconfigs
+        # Try multiple defconfig names
         if make O=out vendor/violet-perf_defconfig 2>/dev/null; then
           echo "✅ Using vendor/violet-perf_defconfig"
         elif make O=out violet-perf_defconfig 2>/dev/null; then
@@ -132,158 +100,133 @@ jobs:
         else
           echo "❌ No valid defconfig found!"
           echo "Available configs:"
-          ls arch/arm64/configs/ | grep -i violet || true
+          ls arch/arm64/configs/ | grep violet
           exit 1
         fi
         
-        # Add KernelSU config
-        echo ""
-        echo "Adding KernelSU configuration..."
-        echo "# KernelSU v0.9.4" >> out/.config
+        # ✅ إضافة KernelSU إلى الـ config (هذا ما كان ينقصك!)
+        echo "Adding KernelSU to config..."
         echo "CONFIG_KSU=y" >> out/.config
         echo 'CONFIG_KSU_NAME="KSU"' >> out/.config
-        echo "CONFIG_KSU_DEBUG=n" >> out/.config
         
-        # Update config
+        # ✅ تحديث الـ config
         make O=out ARCH=arm64 olddefconfig
         
-        echo "✅ Kernel config generated with KSU support"
+        echo "✅ Defconfig generated successfully WITH KSU"
         
-    # ==================== 🔨 8. COMPILE KERNEL ====================
-    - name: "🔨 Compile Kernel"
+    - name: 🔨 Compile Kernel with ZyC 15.0.7
       run: |
         export PATH="$(pwd)/clang/bin:$PATH"
         export ARCH=arm64
         export SUBARCH=arm64
-        export KBUILD_BUILD_USER="GitHub-Actions"
-        export KBUILD_BUILD_HOST="KernelSU-Build"
+        export KBUILD_BUILD_USER=Red-A-Hawk
+        export KBUILD_BUILD_HOST=GitHub-Actions
         
         echo "🔨 Starting kernel compilation..."
-        echo "Start time: $(date)"
-        
+        echo "⏰ Start time: $(date)"
         START=$(date +%s)
         
-        # Build kernel
-        make -j$(nproc --all) O=out ARCH=arm64 CC="clang" \
-          CLANG_TRIPLE="aarch64-linux-gnu-" \
-          CROSS_COMPILE="aarch64-linux-gnu-" \
-          CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
+        echo "💾 Memory before build:"
+        free -h
+        
+        # Compile without LLVM flags to avoid pipe errors
+        make -j$(nproc --all) O=out \
+          ARCH=arm64 \
+          SUBARCH=arm64 \
+          CC=clang \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
           2>&1 | tee build.log
         
         BUILD_STATUS=$?
+        
         END=$(date +%s)
         DIFF=$((END - START))
         
-        echo ""
-        echo "End time: $(date)"
-        echo "Build duration: $((DIFF / 60))m $((DIFF % 60))s"
+        echo "⏰ End time: $(date)"
+        echo "⏱️ Build duration: $((DIFF / 60)) minutes $((DIFF % 60)) seconds"
         echo "BUILD_TIME=$((DIFF / 60))m $((DIFF % 60))s" >> $GITHUB_ENV
+        
+        echo "💾 Memory after build:"
+        free -h
         
         if [ $BUILD_STATUS -ne 0 ]; then
           echo "❌ Build failed with exit code $BUILD_STATUS"
-          echo "Last 20 lines of build log:"
-          tail -20 build.log
           exit $BUILD_STATUS
-        else
-          echo "✅ Build completed successfully"
         fi
         
-    # ==================== ✅ 9. VERIFY BUILD ====================
-    - name: "✅ Verify Build"
+    - name: ✔️ Verify Build Output
       id: check
       run: |
-        echo "Verifying build output..."
+        echo "🔍 Checking build output..."
         
-        IMAGE="out/arch/arm64/boot/Image.gz"
-        DTBO="out/arch/arm64/boot/dtbo.img"
+        IMAGE=out/arch/arm64/boot/Image.gz
+        DTBO=out/arch/arm64/boot/dtbo.img
         
-        if [[ -f "$IMAGE" && -f "$DTBO" ]]; then
+        echo "📁 Checking files:"
+        
+        if [[ -f ${IMAGE} && -f ${DTBO} ]]; then
           echo "success=true" >> $GITHUB_OUTPUT
           echo "✅ Build successful!"
           echo ""
-          echo "📦 Image.gz: $(du -h $IMAGE | cut -f1)"
-          echo "📦 dtbo.img: $(du -h $DTBO | cut -f1)"
+          echo "📦 Image.gz:"
+          ls -lh ${IMAGE}
+          echo "  Size: $(du -h ${IMAGE} | cut -f1)"
+          echo ""
+          echo "📦 dtbo.img:"
+          ls -lh ${DTBO}
+          echo "  Size: $(du -h ${DTBO} | cut -f1)"
         else
           echo "success=false" >> $GITHUB_OUTPUT
           echo "❌ Build incomplete!"
           echo ""
-          [ -f "$IMAGE" ] && echo "✅ Image.gz found" || echo "❌ Image.gz missing"
-          [ -f "$DTBO" ] && echo "✅ dtbo.img found" || echo "❌ dtbo.img missing"
-          exit 1
+          [ -f ${IMAGE} ] && echo "  ✅ Image.gz found" || echo "  ❌ Image.gz missing"
+          [ -f ${DTBO} ] && echo "  ✅ dtbo.img found" || echo "  ❌ dtbo.img missing"
+          echo ""
+          echo "📂 Contents of out/arch/arm64/boot/:"
+          ls -la out/arch/arm64/boot/ || echo "Directory not found"
         fi
         
-    # ==================== 📦 10. CREATE FLASHABLE ZIP ====================
-    - name: "📦 Create Flashable ZIP"
+    - name: 📦 Create Flashable ZIP
       if: steps.check.outputs.success == 'true'
       run: |
-        echo "Creating flashable ZIP..."
+        echo "📦 Creating flashable ZIP..."
         
-        # Clone AnyKernel3 from sixteen branch
-        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3 -b sixteen AK3
+        # Clone AnyKernel3 من الفرع الصحيح
+        git clone -q https://github.com/Joker-V2/AnyKernel3 -b sixteen AK3
         
         # Copy kernel files
         cp out/arch/arm64/boot/Image.gz AK3/
         cp out/arch/arm64/boot/dtbo.img AK3/
         
-        # Create build info
-        echo "Creating build information..."
-        cat > AK3/build_info.txt << 'EOF'
-Kernel: xcalibur-v5.3-violet-dynamic-ksu
-Device: Xiaomi Violet (Redmi Note 7 Pro)
-KernelSU: v0.9.4 (non-GKI)
-Compiler: ZyC Clang 15.0.7
-Build Date: $(date)
-Build Time: ${{ env.BUILD_TIME }}
-AnyKernel3: sixteen branch
-EOF
-        
-        # Create unsigned ZIP
-        cd AK3
-        ZIPNAME="Violet-KSU-$(date +%Y%m%d-%H%M).zip"
-        echo "Creating ZIP: $ZIPNAME"
-        zip -r9 "../$ZIPNAME" * -x .git README.md .gitignore > /dev/null
-        cd ..
-        
-        echo "✅ Unsigned ZIP created: $ZIPNAME"
-        echo "Size: $(du -h $ZIPNAME | cut -f1)"
-        
-    # ==================== 🔏 11. SIGN ZIP WITH ZIPSIGNER ====================
-    - name: "🔏 Sign ZIP with Zipsigner"
-      if: steps.check.outputs.success == 'true'
-      run: |
-        echo "Signing ZIP with Zipsigner..."
-        
-        # Download zipsigner
+        # ✅ إضافة Zipsigner (اختياري)
+        echo "🔏 Adding zipsigner..."
         wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar -O zipsigner.jar
         
-        # Find the unsigned zip
-        UNSIGNED_ZIP="Violet-KSU-*.zip"
-        SIGNED_ZIP="${UNSIGNED_ZIP%.zip}-signed.zip"
+        # Create ZIP
+        cd AK3
+        ZIPNAME="Violet-KSU-ZyC15-$(date +%Y%m%d-%H%M).zip"
+        zip -r9 ../${ZIPNAME} * -x .git README.md .gitignore
+        cd ..
         
-        echo "Signing: $UNSIGNED_ZIP"
-        java -jar zipsigner.jar "$UNSIGNED_ZIP" "$SIGNED_ZIP"
+        # ✅ توقيع الـ ZIP
+        echo "Signing ZIP..."
+        java -jar zipsigner.jar ${ZIPNAME} ${ZIPNAME%.zip}-signed.zip
         
-        if [ $? -eq 0 ]; then
-          echo "✅ Signed ZIP created: $SIGNED_ZIP"
-          echo "SIGNED_ZIP=$SIGNED_ZIP" >> $GITHUB_ENV
-          echo "Size: $(du -h $SIGNED_ZIP | cut -f1)"
-        else
-          echo "⚠️ Failed to sign ZIP, using unsigned version"
-          echo "SIGNED_ZIP=$UNSIGNED_ZIP" >> $GITHUB_ENV
-        fi
+        echo "✅ Created: ${ZIPNAME%.zip}-signed.zip"
+        ls -lh ${ZIPNAME%.zip}-signed.zip
+        echo "  Size: $(du -h ${ZIPNAME%.zip}-signed.zip | cut -f1)"
         
-    # ==================== 📤 12. UPLOAD ARTIFACTS ====================
-    - name: "📤 Upload Kernel ZIP"
+    - name: 📤 Upload Kernel ZIP
       if: steps.check.outputs.success == 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: Violet-KSU-Kernel-${{ github.run_number }}
-        path: |
-          *-signed.zip
-          Violet-KSU-*.zip
+        name: Violet-KSU-ZyC15-${{ github.run_number }}
+        path: Violet-KSU-ZyC15-*-signed.zip
         retention-days: 30
         
-    - name: "📤 Upload Build Log"
+    - name: 📤 Upload Build Log
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -291,50 +234,34 @@ EOF
         path: build.log
         retention-days: 7
         
-    # ==================== 📊 13. BUILD SUMMARY ====================
-    - name: "📊 Build Summary"
+    - name: 📊 Build Summary
       if: always()
       run: |
-        echo "## 🚀 Kernel Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "## 📊 Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔧 Build Configuration" >> $GITHUB_STEP_SUMMARY
+        echo "- **Compiler:** ZyC Clang 15.0.7 (11 Nov 2024)" >> $GITHUB_STEP_SUMMARY
+        echo "- **KernelSU:** v0.9.4 (non-GKI)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Device:** Xiaomi Violet (Redmi Note 7 Pro)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch:** sixteen-ksu" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Time:** ${{ env.BUILD_TIME }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         if [ "${{ steps.check.outputs.success }}" == "true" ]; then
-          echo "### ✅ **BUILD SUCCESSFUL!** 🎉" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 📋 Build Details" >> $GITHUB_STEP_SUMMARY
-          echo "- **Device:** Xiaomi Violet (Redmi Note 7 Pro)" >> $GITHUB_STEP_SUMMARY
-          echo "- **KernelSU:** v0.9.4 (non-GKI compatible)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Compiler:** ZyC Clang 15.0.7" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build Time:** ${{ env.BUILD_TIME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **AnyKernel3:** sixteen branch" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 Your kernel with KernelSU is ready!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "#### 📥 Download" >> $GITHUB_STEP_SUMMARY
-          echo "Download the **signed kernel** from **Artifacts** tab → **Violet-KSU-Kernel-${{ github.run_number }}**" >> $GITHUB_STEP_SUMMARY
+          echo "📥 **Download from Artifacts above**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "#### ⚡ Flash Instructions" >> $GITHUB_STEP_SUMMARY
-          echo "1. **Download** the signed ZIP from Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "2. **Boot** to TWRP/OrangeFox Recovery" >> $GITHUB_STEP_SUMMARY
-          echo "3. **Flash** the ZIP file" >> $GITHUB_STEP_SUMMARY
-          echo "4. **Wipe cache/dalvik** (recommended)" >> $GITHUB_STEP_SUMMARY
-          echo "5. **Reboot** system" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "#### 🔧 Features" >> $GITHUB_STEP_SUMMARY
-          echo "- Full KernelSU v0.9.4 support" >> $GITHUB_STEP_SUMMARY
-          echo "- Signed flashable package" >> $GITHUB_STEP_SUMMARY
-          echo "- Optimized for Xiaomi Violet" >> $GITHUB_STEP_SUMMARY
-          echo "- Built with latest toolchain" >> $GITHUB_STEP_SUMMARY
-          
+          echo "⚡ **Flash with TWRP/OrangeFox**" >> $GITHUB_STEP_SUMMARY
         else
-          echo "### ❌ **BUILD FAILED**" >> $GITHUB_STEP_SUMMARY
+          echo "### ❌ Build Failed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check the **Build-Log-${{ github.run_number }}** artifact for error details." >> $GITHUB_STEP_SUMMARY
+          echo "🔍 Check the build log in Artifacts for details" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### 💡 Common Solutions" >> $GITHUB_STEP_SUMMARY
-          echo "- Check KernelSU integration" >> $GITHUB_STEP_SUMMARY
-          echo "- Verify kernel configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- Ensure sufficient memory/swap" >> $GITHUB_STEP_SUMMARY
-          echo "- Check toolchain compatibility" >> $GITHUB_STEP_SUMMARY
+          echo "💡 Common issues:" >> $GITHUB_STEP_SUMMARY
+          echo "- Missing dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "- Incorrect defconfig" >> $GITHUB_STEP_SUMMARY
+          echo "- Compiler errors" >> $GITHUB_STEP_SUMMARY
         fi
