@@ -1,0 +1,189 @@
+name: "🔨 Build Kernel for Redmi Note 7 Pro"
+
+on:
+  workflow_dispatch:  # تشغيل يدوي فقط
+  push:
+    branches: [ sixteen-ksu ]  # يشتغل تلقائيًا عند push لهذا الفرع
+
+env:
+  KERNEL_NAME: "Redmi-Note-7-Pro-KSU"  # غيّره كما تريد
+  ARCH: "arm64"
+  CONFIG_FILE: "vendor/violet-perf_defconfig"
+  
+  # المترجم - اتركه كما هو
+  TOOLCHAIN_URL: "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz"
+  
+  # AnyKernel3 - اتركه كما هو
+  ANYKERNEL_URL: "https://github.com/Joker-V2/AnyKernel3"
+  ANYKERNEL_BRANCH: "sixteen"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90  # وقت كافي لأول مرة
+    
+    steps:
+    # ========== 1. استنسخ مستودعك ==========
+    - name: "📥 Clone Your Repository"
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        ref: 'sixteen-ksu'
+        
+    # ========== 2. ثبت الأدوات ==========
+    - name: "🔧 Install Build Tools"
+      run: |
+        echo "🔄 Updating packages..."
+        sudo apt-get update -y
+        
+        echo "📦 Installing tools..."
+        sudo apt-get install -y \
+          bc bison build-essential ccache curl \
+          flex gcc-aarch64-linux-gnu git \
+          libelf-dev libssl-dev make \
+          python3 wget zip default-jre \
+          cpio kmod libncurses5-dev
+        
+        echo "💾 Adding swap memory..."
+        sudo fallocate -l 12G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        
+    # ========== 3. جهز المترجم ==========
+    - name: "⚙️ Setup Clang Toolchain"
+      run: |
+        echo "⬇️ Downloading Clang toolchain..."
+        mkdir -p tc
+        wget -q ${{ env.TOOLCHAIN_URL }} -O clang.tar.gz
+        tar -xf clang.tar.gz -C tc --strip-components=1
+        rm -f clang.tar.gz
+        
+        echo "🔧 Adding to PATH..."
+        echo "$(pwd)/tc/bin" >> $GITHUB_PATH
+        
+    # ========== 4. تأكد من KernelSU ==========
+    - name: "✅ Verify KernelSU Setup"
+      run: |
+        echo "🔍 Checking KernelSU configuration..."
+        
+        # تأكد من وجود مجلد KernelSU
+        if [ ! -d "drivers/kernelsu" ]; then
+          echo "❌ ERROR: drivers/kernelsu/ not found!"
+          echo "This repository doesn't have KernelSU integrated."
+          exit 1
+        fi
+        
+        # تأكد من وجود CONFIG_KSU=y في defconfig
+        if grep -q "CONFIG_KSU=y" "arch/arm64/configs/${{ env.CONFIG_FILE }}"; then
+          echo "✓ CONFIG_KSU=y found in defconfig"
+        else
+          echo "⚠️ Warning: CONFIG_KSU=y not in defconfig"
+          echo "Trying to add it..."
+          echo "CONFIG_KSU=y" >> "arch/arm64/configs/${{ env.CONFIG_FILE }}"
+        fi
+        
+        echo "✅ KernelSU verification complete"
+        
+    # ========== 5. أنشئ ملف التكوين ==========
+    - name: "🎛️ Generate Kernel Config"
+      run: |
+        echo "⚙️ Creating kernel configuration..."
+        mkdir -p out
+        make O=out ARCH=${{ env.ARCH }} ${{ env.CONFIG_FILE }}
+        
+        # تحقق نهائي
+        if grep -q "CONFIG_KSU=y" out/.config; then
+          echo "✓ CONFIG_KSU=y confirmed in final config"
+        else
+          echo "❌ ERROR: KernelSU not enabled in final config!"
+          exit 1
+        fi
+        
+    # ========== 6. ابنِ النواة ==========
+    - name: "🔨 Build Kernel"
+      run: |
+        echo "🏗️ Starting kernel build..."
+        echo "Start time: $(date)"
+        START_TIME=$(date +%s)
+        
+        # البناء الفعلي
+        make -j$(($(nproc) * 2)) \
+          O=out \
+          ARCH=${{ env.ARCH }} \
+          CC="ccache clang" \
+          CLANG_TRIPLE="aarch64-linux-gnu-" \
+          CROSS_COMPILE="aarch64-linux-gnu-" \
+          CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          2>&1 | tee build.log
+        
+        END_TIME=$(date +%s)
+        BUILD_TIME=$((END_TIME - START_TIME))
+        echo "Build time: $BUILD_TIME seconds"
+        
+        # تحقق من الملفات المبنية
+        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
+          echo "✅ Kernel Image.gz created successfully"
+        else
+          echo "❌ ERROR: Kernel Image.gz not found!"
+          exit 1
+        fi
+        
+    # ========== 7. أنشئ ملف فلاش ==========
+    - name: "📦 Create Flashable ZIP"
+      run: |
+        echo "📁 Creating flashable zip..."
+        
+        # استنسخ AnyKernel3
+        git clone --depth=1 \
+          ${{ env.ANYKERNEL_URL }} \
+          --branch ${{ env.ANYKERNEL_BRANCH }} \
+          anykernel
+        
+        # انقل ملفات النواة
+        cp out/arch/arm64/boot/Image.gz anykernel/
+        cp out/arch/arm64/boot/dtbo.img anykernel/ 2>/dev/null || true
+        
+        # أنشئ ملف ZIP
+        cd anykernel
+        ZIP_NAME="${{ env.KERNEL_NAME }}-$(date +%Y%m%d-%H%M).zip"
+        zip -r9 "../$ZIP_NAME" ./*
+        cd ..
+        
+        # وقع الملف (اختياري)
+        if command -v java &> /dev/null; then
+          wget -q https://raw.githubusercontent.com/topjohnwu/ZipSigner/master/cli/zipsigner-3.0.jar -O zipsigner.jar
+          java -jar zipsigner.jar "$ZIP_NAME" "${ZIP_NAME%.zip}-signed.zip"
+          FINAL_ZIP="${ZIP_NAME%.zip}-signed.zip"
+        else
+          FINAL_ZIP="$ZIP_NAME"
+        fi
+        
+        echo "✅ Flashable ZIP created: $FINAL_ZIP"
+        
+    # ========== 8. رفع الملفات ==========
+    - name: "📤 Upload Build Artifacts"
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-build-${{ github.run_number }}
+        path: |
+          *.zip
+          build.log
+        retention-days: 7
+        
+    # ========== 9. تقرير النتيجة ==========
+    - name: "📊 Build Report"
+      run: |
+        echo "### 🎉 Kernel Build Complete!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Kernel:** ${{ env.KERNEL_NAME }}" >> $GITHUB_STEP_SUMMARY
+        echo "**KernelSU:** ✅ Integrated and Enabled" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+        echo "1. Download the ZIP file from Artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "2. Flash via TWRP/OrangeFox Recovery" >> $GITHUB_STEP_SUMMARY
+        echo "3. Reboot and install KernelSU Manager app" >> $GITHUB_STEP_SUMMARY
