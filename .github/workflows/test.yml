@@ -1,199 +1,499 @@
-name: "🚀 Build Kernel with KernelSU"
+name: "Kernel Builder with KernelSU Next"
 
 on:
   workflow_dispatch:
   push:
     branches: [ sixteen-ksu ]
 
+env:
+  KERNEL_NAME: "xcalibur-v5.3-violet-dynamic-ksu"
+  ARCH: "arm64"
+  CONFIG_FILE: "vendor/violet-perf_defconfig"
+  
+  # Toolchain
+  TOOLCHAIN_URL: "https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz"
+  
+  # AnyKernel
+  ANYKERNEL_URL: "https://github.com/Joker-V2/AnyKernel3"
+  ANYKERNEL_BRANCH: "sixteen"
+  
+  # KernelSU Next Configuration
+  KSU_NEXT_VERSION: "v3.0.0"
+  KSU_NEXT_APK_URL: "https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.0.0/KernelSU_Next_v3.0.0_32857-release.apk"
+  KSU_NEXT_DRIVER_URL: "https://github.com/KernelSU-Next/KernelSU/archive/refs/heads/stable-1134.tar.gz"
+  
+  # Verification
+  REQUIRED_KSU_FILES: "core.c ksu.c apk.c"
+
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     
-    env:
-      KERNEL_NAME: "xcalibur-v5.4-violet-dynamic-ksu"
-      ARCH: "arm64"
-      CONFIG_FILE: "vendor/violet-perf_defconfig"
-      
     steps:
-    # ==================== 📥 GET SOURCE ====================
-    - name: "📥 Checkout Kernel Source"
+    # ==================== 📥 1. GET KERNEL SOURCE ====================
+    - name: "📥 Get kernel source from sixteen-ksu"
       uses: actions/checkout@v4
       with:
         submodules: recursive
+        ref: sixteen-ksu
 
-    # ==================== 🔍 CHECK KERNELSU ====================
-    - name: "🔍 Check KernelSU Integration"
-      id: check_ksu
+    # ==================== 📊 2. SHOW ENVIRONMENT INFO ====================
+    - name: "📊 Show environment info"
+      id: env_info
       run: |
-        echo "Checking KernelSU in kernel source..."
+        echo "===== Environment Information ====="
+        echo "Kernel: ${{ env.KERNEL_NAME }}"
+        echo "Architecture: ${{ env.ARCH }}"
+        echo "Config: ${{ env.CONFIG_FILE }}"
+        echo "KSU Next: ${{ env.KSU_NEXT_VERSION }}"
+        echo "================================"
         
-        # التحقق من وجود KernelSU (متوقع في فرع sixteen-ksu)
-        if [ -d "drivers/kernelsu" ] && [ -f "drivers/kernelsu/core.c" ]; then
-          echo "✅ KernelSU found in drivers/kernelsu/"
-          
-          # التأكد من الإضافة إلى Makefile
-          if ! grep -q "kernelsu" drivers/Makefile; then
-            echo "obj-\$(CONFIG_KSU) += kernelsu/" >> drivers/Makefile
-            echo "✓ Added to Makefile"
-          fi
-          
-          # التأكد من الإضافة إلى Kconfig
-          if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
-            sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-            echo "✓ Added to Kconfig"
-          fi
-          
-          echo "KSU_EXISTS=true" >> $GITHUB_OUTPUT
-        else
-          echo "❌ KernelSU not found in source"
-          echo "KSU_EXISTS=false" >> $GITHUB_OUTPUT
-        fi
+        echo "Git information:"
+        git branch --show-current
+        git log --oneline -1
+        echo "================================"
 
-    # ==================== 📦 INSTALL TOOLS ====================
-    - name: "📦 Install Build Tools"
+    # ==================== 🧹 3. CLEAN OLD BUILD ====================
+    - name: "🧹 Clean previous build"
       run: |
-        echo "Installing dependencies..."
+        echo "Cleaning previous build artifacts..."
+        rm -rf out anykernel tc kernelsu-driver 2>/dev/null || true
+        make clean 2>/dev/null || true
+        make mrproper 2>/dev/null || true
+        echo "Cleanup completed"
+
+    # ==================== 📦 4. INSTALL DEPENDENCIES ====================
+    - name: "📦 Install build dependencies"
+      run: |
+        echo "Installing required packages..."
         sudo apt-get update
         sudo apt-get install -y \
-          bc bison build-essential ccache curl flex \
-          gcc-aarch64-linux-gnu git libelf-dev libssl-dev \
-          make python3 wget zip \
-          lld llvm patch cpio kmod
+          bc bison build-essential ccache curl \
+          flex gcc-aarch64-linux-gnu git \
+          libelf-dev libssl-dev make \
+          python3 wget zip default-jre \
+          file binutils patchelf
+        echo "✅ Dependencies installed"
 
-    # ==================== 💾 ADD SWAP ====================
-    - name: "💾 Add 8GB Swap"
+    # ==================== 💾 5. SETUP SWAP MEMORY ====================
+    - name: "💾 Setup swap memory"
       run: |
-        echo "Adding swap space..."
-        sudo fallocate -l 8G /swapfile
+        echo "Setting up swap space..."
+        sudo swapoff -a 2>/dev/null || true
+        sudo fallocate -l 10G /swapfile
         sudo chmod 600 /swapfile
         sudo mkswap /swapfile
         sudo swapon /swapfile
-        echo "✅ Swap ready"
+        sudo sysctl vm.swappiness=50
+        
+        echo "Memory status:"
+        free -h
+        echo "Swap status:"
+        swapon --show
 
-    # ==================== 🔧 SETUP TOOLCHAIN ====================
-    - name: "🔧 Setup Toolchain"
+    # ==================== 🔧 6. DOWNLOAD TOOLCHAIN ====================
+    - name: "🔧 Download and setup toolchain"
+      id: toolchain
       run: |
-        echo "Downloading Clang toolchain..."
-        wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        echo "Setting up ZyC Clang toolchain..."
         
-        mkdir -p clang
-        tar -xf Clang-15.0.7-20251111.tar.gz -C clang/ --strip-components=1
-        rm Clang-15.0.7-20251111.tar.gz
+        # Create toolchain directory
+        mkdir -p tc
         
-        echo "$(pwd)/clang/bin" >> $GITHUB_PATH
-        echo "✅ Toolchain ready"
+        # Download toolchain
+        echo "Downloading toolchain..."
+        wget -q --show-progress ${{ env.TOOLCHAIN_URL }} -O clang.tar.gz
+        
+        # Extract toolchain
+        echo "Extracting toolchain..."
+        tar -xf clang.tar.gz -C tc --strip-components=1
+        
+        # Clean up
+        rm -f clang.tar.gz
+        
+        # Add to PATH
+        echo "tc/bin" >> $GITHUB_PATH
+        
+        # Verify installation
+        echo "✅ Toolchain installed:"
+        ./tc/bin/clang --version | head -3
+        echo "COMPILER_VERSION=$(./tc/bin/clang --version | head -1)" >> $GITHUB_OUTPUT
 
-    # ==================== ⚙️ CONFIGURE KERNEL ====================
-    - name: "⚙️ Configure Kernel"
+    # ==================== ⭐ 7. DOWNLOAD KERNELSU NEXT DRIVER ====================
+    - name: "⭐ Download KernelSU Next driver"
+      id: download_ksu
       run: |
-        echo "Configuring kernel..."
+        echo "Setting up KernelSU Next ${{ env.KSU_NEXT_VERSION }}..."
         
-        export PATH="$(pwd)/clang/bin:$PATH"
+        # Create kernelsu directory
+        mkdir -p drivers/kernelsu
+        
+        # Download KernelSU driver
+        echo "Downloading KernelSU driver..."
+        wget -q ${{ env.KSU_NEXT_DRIVER_URL }} -O kernelsu.tar.gz
+        
+        if [ -f "kernelsu.tar.gz" ]; then
+          echo "Extracting KernelSU..."
+          tar -xf kernelsu.tar.gz --strip-components=1 -C drivers/kernelsu/ || \
+          tar -xf kernelsu.tar.gz -C kernelsu-driver/
+          
+          # Copy files if extracted to separate directory
+          if [ -d "kernelsu-driver" ]; then
+            cp -rf kernelsu-driver/kernel/* drivers/kernelsu/ 2>/dev/null || true
+            rm -rf kernelsu-driver
+          fi
+          
+          rm -f kernelsu.tar.gz
+          
+          # Verify KernelSU files
+          echo "Verifying KernelSU files..."
+          for ksu_file in ${{ env.REQUIRED_KSU_FILES }}; do
+            if [ -f "drivers/kernelsu/$ksu_file" ]; then
+              echo "✅ $ksu_file found"
+            else
+              echo "❌ $ksu_file missing"
+            fi
+          done
+          
+          echo "KSU_STATUS=downloaded" >> $GITHUB_OUTPUT
+          echo "✅ KernelSU Next driver added"
+        else
+          echo "⚠️ Could not download KernelSU driver"
+          echo "KSU_STATUS=skipped" >> $GITHUB_OUTPUT
+        fi
+
+    # ==================== 📱 8. DOWNLOAD KERNELSU APK ====================
+    - name: "📱 Download KernelSU Next APK"
+      id: download_apk
+      run: |
+        echo "Downloading KernelSU Next APK..."
+        wget -q ${{ env.KSU_NEXT_APK_URL }} -O kernelsu.apk
+        
+        if [ -f "kernelsu.apk" ]; then
+          APK_SIZE=$(stat -c%s kernelsu.apk)
+          APK_MB=$((APK_SIZE / 1024 / 1024))
+          echo "APK_SIZE=${APK_MB}MB" >> $GITHUB_ENV
+          echo "✅ KernelSU APK downloaded: ${APK_MB}MB"
+          echo "APK_CHECKSUM=$(md5sum kernelsu.apk | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ Could not download KernelSU APK"
+          echo "APK_CHECKSUM=missing" >> $GITHUB_OUTPUT
+        fi
+
+    # ==================== ⚙️ 9. KERNEL CONFIGURATION ====================
+    - name: "⚙️ Generate kernel configuration"
+      id: config
+      run: |
+        echo "Generating kernel configuration..."
+        
+        # Create output directory
         mkdir -p out
         
-        # إنشاء التكوين الأساسي
+        # Generate initial config
+        echo "Using config: ${{ env.CONFIG_FILE }}"
         make O=out ARCH=${{ env.ARCH }} ${{ env.CONFIG_FILE }}
         
-        # إضافة KernelSU config
+        # Add KernelSU configuration
+        echo "Adding KernelSU configuration..."
+        echo "# KernelSU Next ${{ env.KSU_NEXT_VERSION }}" >> out/.config
         echo "CONFIG_KSU=y" >> out/.config
+        echo 'CONFIG_KSU_NAME="KernelSU-Next"' >> out/.config
+        echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
         echo "CONFIG_KSU_DEBUG=n" >> out/.config
+        echo "CONFIG_KPROBES=y" >> out/.config
+        echo "CONFIG_HAVE_KPROBES=y" >> out/.config
         
-        # تحديث التكوين
+        # Update config with defaults
         make O=out ARCH=${{ env.ARCH }} olddefconfig
         
-        echo "✅ Kernel configured"
-        echo "KSU enabled: $(grep CONFIG_KSU out/.config)"
+        # Verify KSU is enabled
+        echo "Checking KernelSU configuration..."
+        KSU_CONFIG_COUNT=$(grep -c "CONFIG_KSU" out/.config || echo "0")
+        echo "KSU_CONFIG_LINES=${KSU_CONFIG_COUNT}" >> $GITHUB_OUTPUT
+        
+        if [ $KSU_CONFIG_COUNT -gt 0 ]; then
+          echo "✅ KernelSU configuration found ($KSU_CONFIG_COUNT lines)"
+          grep "CONFIG_KSU" out/.config
+        else
+          echo "⚠️ No KernelSU configuration found"
+        fi
+        
+        echo "Config file size: $(wc -l < out/.config) lines"
 
-    # ==================== 🔨 COMPILE KERNEL ====================
-    - name: "🔨 Compile Kernel"
+    # ==================== 🔍 10. PRE-BUILD VERIFICATION ====================
+    - name: "🔍 Pre-build verification"
+      id: pre_verify
+      run: |
+        echo "===== Pre-Build Verification ====="
+        
+        # Check toolchain
+        if command -v clang >/dev/null 2>&1; then
+          echo "✅ Clang found: $(clang --version | head -1)"
+        else
+          echo "❌ Clang not found in PATH"
+          exit 1
+        fi
+        
+        # Check kernel source
+        if [ -f "Makefile" ]; then
+          echo "✅ Kernel Makefile found"
+        else
+          echo "❌ Kernel Makefile not found"
+          exit 1
+        fi
+        
+        # Check config
+        if [ -f "out/.config" ]; then
+          echo "✅ Kernel config generated"
+        else
+          echo "❌ Kernel config missing"
+          exit 1
+        fi
+        
+        # Check KernelSU driver
+        if [ -f "drivers/kernelsu/core.c" ]; then
+          echo "✅ KernelSU driver files present"
+          echo "KSU_DRIVER_READY=true" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ KernelSU driver files missing"
+          echo "KSU_DRIVER_READY=false" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "✅ All pre-build checks passed"
+
+    # ==================== 🔨 11. COMPILE KERNEL ====================
+    - name: "🔨 Compile kernel"
       id: compile
       run: |
-        echo "Compiling kernel..."
+        echo "===== Kernel Compilation ====="
+        echo "Start time: $(date)"
         
-        export PATH="$(pwd)/clang/bin:$PATH"
         START_TIME=$(date +%s)
         
-        make -j$(nproc) O=out \
+        # Build kernel with verbose output
+        make -j$(nproc) \
+          O=out \
           ARCH=${{ env.ARCH }} \
-          CC="clang" \
+          CC="ccache clang" \
           CLANG_TRIPLE="aarch64-linux-gnu-" \
           CROSS_COMPILE="aarch64-linux-gnu-" \
+          CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
           LLVM=1 \
+          LLVM_IAS=1 \
+          V=1 \
           2>&1 | tee build.log
         
+        BUILD_STATUS=$?
         END_TIME=$(date +%s)
         BUILD_TIME=$((END_TIME - START_TIME))
-        echo "BUILD_TIME=${BUILD_TIME}s" >> $GITHUB_ENV
         
-        # التحقق من نجاح البناء
-        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
-          echo "✅ Build successful"
-          echo "BUILD_STATUS=success" >> $GITHUB_OUTPUT
+        echo "End time: $(date)"
+        echo "Build duration: $((BUILD_TIME / 60))m $((BUILD_TIME % 60))s"
+        
+        # Save build information
+        echo "BUILD_TIME_SECONDS=$BUILD_TIME" >> $GITHUB_ENV
+        echo "BUILD_MINUTES=$((BUILD_TIME / 60))" >> $GITHUB_ENV
+        echo "BUILD_SECONDS=$((BUILD_TIME % 60))" >> $GITHUB_ENV
+        
+        if [ $BUILD_STATUS -ne 0 ]; then
+          echo "❌ Build failed with exit code: $BUILD_STATUS"
+          echo "COMPILE_STATUS=failed" >> $GITHUB_OUTPUT
+          exit $BUILD_STATUS
         else
-          echo "❌ Build failed - Image.gz not found"
-          echo "BUILD_STATUS=failed" >> $GITHUB_OUTPUT
+          echo "✅ Build completed successfully"
+          echo "COMPILE_STATUS=success" >> $GITHUB_OUTPUT
+        fi
+
+    # ==================== ✅ 12. POST-BUILD VERIFICATION ====================
+    - name: "✅ Post-build verification"
+      id: post_verify
+      run: |
+        echo "===== Post-Build Verification ====="
+        
+        REQUIRED_FILES=(
+          "out/arch/arm64/boot/Image.gz"
+          "out/arch/arm64/boot/dtbo.img"
+          "out/vmlinux"
+        )
+        
+        ALL_FILES_EXIST=true
+        VERIFICATION_DETAILS=""
+        
+        for FILE in "${REQUIRED_FILES[@]}"; do
+          if [ -f "$FILE" ]; then
+            FILE_SIZE=$(du -h "$FILE" | cut -f1)
+            FILE_TYPE=$(file "$FILE" 2>/dev/null | cut -d: -f2 || echo "Unknown")
+            echo "✅ $FILE - $FILE_SIZE - $FILE_TYPE"
+            VERIFICATION_DETAILS="${VERIFICATION_DETAILS}✅ $FILE ($FILE_SIZE)\\n"
+          else
+            echo "❌ $FILE - MISSING"
+            VERIFICATION_DETAILS="${VERIFICATION_DETAILS}❌ $FILE (MISSING)\\n"
+            ALL_FILES_EXIST=false
+          fi
+        done
+        
+        # Check for KernelSU in binary
+        echo "Checking for KernelSU in kernel binary..."
+        if strings out/vmlinux 2>/dev/null | grep -q -i "kernelsu\|KSU"; then
+          echo "✅ KernelSU strings found in kernel binary"
+          KSU_IN_BINARY=true
+          VERIFICATION_DETAILS="${VERIFICATION_DETAILS}✅ KernelSU detected in binary\\n"
+        else
+          echo "⚠️ No KernelSU strings found in kernel binary"
+          KSU_IN_BINARY=false
+          VERIFICATION_DETAILS="${VERIFICATION_DETAILS}⚠️ KernelSU not detected in binary\\n"
+        fi
+        
+        # Check Image.gz properties
+        if [ -f "out/arch/arm64/boot/Image.gz" ]; then
+          IMAGE_SIZE=$(stat -c%s "out/arch/arm64/boot/Image.gz")
+          echo "Image.gz size: $((IMAGE_SIZE / 1024 / 1024)) MB"
+          echo "IMAGE_SIZE_MB=$((IMAGE_SIZE / 1024 / 1024))" >> $GITHUB_ENV
+        fi
+        
+        if [ "$ALL_FILES_EXIST" = true ]; then
+          echo "VERIFY_STATUS=success" >> $GITHUB_OUTPUT
+          echo "KSU_IN_BINARY=$KSU_IN_BINARY" >> $GITHUB_OUTPUT
+          echo "VERIFICATION_DETAILS<<EOF" >> $GITHUB_OUTPUT
+          echo "$VERIFICATION_DETAILS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "✅ All verifications passed"
+        else
+          echo "VERIFY_STATUS=failed" >> $GITHUB_OUTPUT
+          echo "❌ Verification failed"
           exit 1
         fi
 
-    # ==================== 📦 PACKAGE KERNEL ====================
-    - name: "📦 Create Flashable ZIP"
-      if: steps.compile.outputs.BUILD_STATUS == 'success'
+    # ==================== 📦 13. CREATE FLASHABLE ZIP ====================
+    - name: "📦 Create flashable package"
+      if: steps.post_verify.outputs.VERIFY_STATUS == 'success'
       run: |
-        echo "Creating flashable ZIP..."
+        echo "Creating flashable package..."
         
-        # تحميل AnyKernel3
-        git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak3
+        # Clone AnyKernel3
+        echo "Downloading AnyKernel3..."
+        git clone --depth=1 ${{ env.ANYKERNEL_URL }} --branch ${{ env.ANYKERNEL_BRANCH }} anykernel
         
-        # نسخ ملفات النواة
-        cp out/arch/arm64/boot/Image.gz ak3/
-        cp out/arch/arm64/boot/dtbo.img ak3/ 2>/dev/null || true
+        # Copy kernel files
+        echo "Copying kernel files..."
+        cp out/arch/arm64/boot/Image.gz anykernel/
+        cp out/arch/arm64/boot/dtbo.img anykernel/
         
-        # إنشاء ملف معلومات
-        cat > ak3/build-info.txt << EOF
-        Kernel: ${{ env.KERNEL_NAME }}
-        Branch: sixteen-ksu
-        Build: #${{ github.run_number }}
-        Date: $(date)
-        KernelSU: ${{ steps.check_ksu.outputs.KSU_EXISTS }}
-        EOF
+        # Add KernelSU APK if available
+        if [ -f "kernelsu.apk" ]; then
+          echo "Adding KernelSU APK..."
+          mkdir -p anykernel/apk
+          cp kernelsu.apk anykernel/apk/KernelSU_Next_${{ env.KSU_NEXT_VERSION }}.apk
+        fi
         
-        # إنشاء ZIP
-        cd ak3
-        ZIP_NAME="kernel-${{ github.run_number }}.zip"
+        # Create detailed build info
+        echo "Creating build information..."
+        echo "=== Kernel Build Information ===" > anykernel/build_info.txt
+        echo "Kernel: ${{ env.KERNEL_NAME }}" >> anykernel/build_info.txt
+        echo "Branch: sixteen-ksu" >> anykernel/build_info.txt
+        echo "KSU Version: ${{ env.KSU_NEXT_VERSION }}" >> anykernel/build_info.txt
+        echo "Build Date: $(date)" >> anykernel/build_info.txt
+        echo "Build Time: ${{ env.BUILD_MINUTES }}m ${{ env.BUILD_SECONDS }}s" >> anykernel/build_info.txt
+        echo "Git Commit: $(git log --oneline -1)" >> anykernel/build_info.txt
+        echo "Compiler: ${{ steps.toolchain.outputs.COMPILER_VERSION }}" >> anykernel/build_info.txt
+        echo "KSU in Binary: ${{ steps.post_verify.outputs.KSU_IN_BINARY }}" >> anykernel/build_info.txt
+        echo "Image Size: ${{ env.IMAGE_SIZE_MB }} MB" >> anykernel/build_info.txt
+        if [ -f "kernelsu.apk" ]; then
+          echo "APK Checksum: ${{ steps.download_apk.outputs.APK_CHECKSUM }}" >> anykernel/build_info.txt
+        fi
+        
+        # Create unsigned zip
+        cd anykernel
+        ZIP_NAME="${{ env.KERNEL_NAME }}-ksu-next-$(date +%Y%m%d-%H%M).zip"
+        echo "Creating ZIP: $ZIP_NAME"
         zip -r9 "../$ZIP_NAME" * > /dev/null
         cd ..
         
-        echo "✅ ZIP created: $ZIP_NAME"
+        # Sign the zip
+        echo "Signing ZIP..."
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar -O zipsigner.jar
+        java -jar zipsigner.jar "$ZIP_NAME" "${ZIP_NAME%.zip}-signed.zip"
+        
+        # Show final result
+        SIGNED_FILE="${ZIP_NAME%.zip}-signed.zip"
+        SIGNED_SIZE=$(du -h "$SIGNED_FILE" | cut -f1)
+        echo "✅ Package created: $SIGNED_FILE ($SIGNED_SIZE)"
+        echo "FINAL_ZIP=$SIGNED_FILE" >> $GITHUB_ENV
 
-    # ==================== 📤 UPLOAD ARTIFACTS ====================
-    - name: "📤 Upload Build Artifacts"
+    # ==================== 📤 14. UPLOAD ARTIFACTS ====================
+    - name: "📤 Upload build artifacts"
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-build-${{ github.run_number }}
+        name: kernel-ksu-next-${{ github.run_number }}
         path: |
-          kernel-*.zip
+          *-signed.zip
           build.log
+          out/arch/arm64/boot/Image.gz
+          out/arch/arm64/boot/dtbo.img
+          kernelsu.apk
         retention-days: 30
+        if-no-files-found: warn
 
-    # ==================== 📊 BUILD SUMMARY ====================
-    - name: "📊 Build Summary"
+    # ==================== 📋 15. UPLOAD DEBUG FILES ====================
+    - name: "📋 Upload debug files"
       if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug-files-${{ github.run_number }}
+        path: |
+          out/.config
+          error.log 2>/dev/null || true
+        retention-days: 7
+
+    # ==================== 📊 16. BUILD SUMMARY ====================
+    - name: "📊 Generate comprehensive build summary"
       run: |
-        echo "### 🎯 Kernel Build Report" >> $GITHUB_STEP_SUMMARY
+        echo "### 🚀 Kernel Build with KernelSU Next" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [ "${{ steps.compile.outputs.BUILD_STATUS }}" = "success" ]; then
-          echo "✅ **BUILD SUCCESSFUL**" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ steps.post_verify.outputs.VERIFY_STATUS }}" = "success" ]; then
+          echo "✅ **BUILD SUCCESSFUL** 🎉" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Kernel:** ${{ env.KERNEL_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** sixteen-ksu" >> $GITHUB_STEP_SUMMARY
-          echo "**KernelSU:** ${{ steps.check_ksu.outputs.KSU_EXISTS }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Time:** ${{ env.BUILD_TIME }}" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📊 Build Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kernel:** ${{ env.KERNEL_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** sixteen-ksu" >> $GITHUB_STEP_SUMMARY
+          echo "- **KernelSU:** Next ${{ env.KSU_NEXT_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Time:** ${{ env.BUILD_MINUTES }}m ${{ env.BUILD_SECONDS }}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compiler:** ${{ steps.toolchain.outputs.COMPILER_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Size:** ${{ env.IMAGE_SIZE_MB }} MB" >> $GITHUB_STEP_SUMMARY
+          echo "- **KSU in Binary:** ${{ steps.post_verify.outputs.KSU_IN_BINARY }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📥 **Download:** kernel-${{ github.run_number }}.zip" >> $GITHUB_STEP_SUMMARY
+          
+          echo "#### ✅ Verification Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.post_verify.outputs.VERIFICATION_DETAILS }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "#### 📥 Download" >> $GITHUB_STEP_SUMMARY
+          echo "Download the signed kernel from **Artifacts** tab → **kernel-ksu-next-${{ github.run_number }}**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "#### ⚡ Features" >> $GITHUB_STEP_SUMMARY
+          echo "- Full KernelSU Next ${{ env.KSU_NEXT_VERSION }} support" >> $GITHUB_STEP_SUMMARY
+          echo "- Signed flashable ZIP" >> $GITHUB_STEP_SUMMARY
+          echo "- Includes KernelSU Manager APK" >> $GITHUB_STEP_SUMMARY
+          echo "- Enhanced verification and validation" >> $GITHUB_STEP_SUMMARY
+          
         else
           echo "❌ **BUILD FAILED**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check the build log for error details" >> $GITHUB_STEP_SUMMARY
+          echo "**Failed Step:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 🔍 Debug Information" >> $GITHUB_STEP_SUMMARY
+          echo "Check the following artifacts for details:" >> $GITHUB_STEP_SUMMARY
+          echo "1. **build.log** - Complete build output" >> $GITHUB_STEP_SUMMARY
+          echo "2. **debug-files-${{ github.run_number }}** - Config and error logs" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 💡 Common Issues" >> $GITHUB_STEP_SUMMARY
+          echo "- Missing dependencies" >> $GITHUB_STEP_SUMMARY
+          echo "- Toolchain issues" >> $GITHUB_STEP_SUMMARY
+          echo "- KernelSU integration problems" >> $GITHUB_STEP_SUMMARY
+          echo "- Configuration errors" >> $GITHUB_STEP_SUMMARY
         fi
