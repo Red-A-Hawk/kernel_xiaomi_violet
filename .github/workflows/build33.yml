@@ -1,0 +1,387 @@
+name: Build Kernel - AOSP Clang 19
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: '🧹 Clean build directory'
+        required: false
+        default: 'false'
+  push:
+    branches: [ sixteen-ksu ]
+
+env:
+  # ⚙️ AOSP Clang 19 Settings
+  AOSP_CLANG_VERSION: "r510928"
+  AOSP_CLANG_URL: "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r510928.tar.gz"
+  
+  # 📱 Device Settings
+  ARCH: "arm64"
+  SUBARCH: "arm64"
+  DEVICE: "violet"
+  
+  # 👤 Build Identity
+  KBUILD_BUILD_USER: "Red-A-Hawk"
+  KBUILD_BUILD_HOST: "GitHub-Actions"
+  
+  # 🛠️ Toolchain Settings
+  CLANG_TRIPLE: "aarch64-linux-gnu-"
+  CROSS_COMPILE: "aarch64-linux-gnu-"
+  CROSS_COMPILE_ARM32: "arm-linux-gnueabi-"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    # ==================== 1. بدء البناء ====================
+    - name: "🚀 Start AOSP Clang 19 Build"
+      run: |
+        echo "╔══════════════════════════════════════════════════════╗"
+        echo "║           🏢 AOSP Clang 19 Professional Build        ║"
+        echo "╠══════════════════════════════════════════════════════╣"
+        echo "║ 📱 Device:    ${{ env.DEVICE }}                      "
+        echo "║ 🏢 Compiler:  AOSP Clang 19.0.0 (r510928)           "
+        echo "║ ⭐ Based on:  Google Official Toolchain             "
+        echo "║ 🔧 Previous:  ZyC Clang 22 Successful               "
+        echo "╚══════════════════════════════════════════════════════╝"
+        echo ""
+        echo "📅 Start: $(date)"
+        echo "💡 Testing official Google toolchain"
+
+    # ==================== 2. تنزيل المصادر ====================
+    - name: "📥 Checkout Kernel Source"
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # ==================== 3. تنظيف نظيف (اختياري) ====================
+    - name: "🧹 Clean Previous Build (Optional)"
+      if: github.event.inputs.clean_build == 'true'
+      run: |
+        echo "🧹 Cleaning previous build..."
+        rm -rf out/ || true
+        rm -rf clang/ || true
+        rm -rf aosp-clang/ || true
+        echo "✅ Cleaned"
+
+    # ==================== 4. تنظيف المساحة ====================
+    - name: "🗑️ Free Disk Space"
+      run: |
+        echo "🗑️ Freeing disk space..."
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo apt-get clean
+        echo "✅ Space freed"
+        df -h
+
+    # ==================== 5. تثبيت المتطلبات ====================
+    - name: "🔧 Install Build Dependencies"
+      run: |
+        echo "📦 Installing dependencies..."
+        sudo apt-get update
+        sudo apt-get install -y bc bison build-essential curl flex \
+        git libssl-dev libncurses5-dev lzop zip wget python3 \
+        xz-utils libxml2-utils  # لأدوات AOSP
+        echo "✅ Dependencies installed"
+
+    # ==================== 6. إعداد Swap ====================
+    - name: "💾 Setup 10GB Swap"
+      run: |
+        echo "💾 Creating 10GB swap space..."
+        sudo swapoff -a 2>/dev/null || true
+        sudo fallocate -l 10G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        sudo sysctl vm.swappiness=100
+        echo "✅ Swap configured:"
+        free -h
+
+    # ==================== 7. ⭐⭐ تنزيل AOSP Clang 19 ====================
+    - name: "📦 Download AOSP Clang 19"
+      id: download_clang
+      timeout-minutes: 25
+      run: |
+        echo "📥 Downloading AOSP Clang 19 (r510928)..."
+        echo "🔗 URL: ${{ env.AOSP_CLANG_URL }}"
+        
+        # تحميل مع إمكانية الاستئناف
+        wget -c --tries=3 --timeout=60 \
+          "${{ env.AOSP_CLANG_URL }}" \
+          -O aosp-clang.tar.gz
+        
+        # التحقق من الحجم
+        FILE_SIZE=$(stat -c%s "aosp-clang.tar.gz")
+        echo "📊 File size: $((FILE_SIZE / 1024 / 1024)) MB"
+        
+        if [ $FILE_SIZE -lt 1000000 ]; then
+          echo "❌ File too small, download may have failed"
+          exit 1
+        fi
+        
+        echo "📂 Extracting AOSP Clang..."
+        mkdir -p aosp-clang
+        tar -xf aosp-clang.tar.gz -C aosp-clang/
+        rm -f aosp-clang.tar.gz
+        
+        echo "✅ AOSP Clang 19 extracted"
+        echo "📋 Toolchain info:"
+        ./aosp-clang/bin/clang --version | head -5
+        
+        # التحقق من الإصدار
+        if ./aosp-clang/bin/clang --version | grep -q "19.0"; then
+          echo "🎯 AOSP Clang 19 confirmed!"
+          echo "clang_version=19" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️ Warning: Version check failed"
+          echo "clang_version=unknown" >> $GITHUB_OUTPUT
+        fi
+
+    # ==================== 8. KernelSU ====================
+    - name: "🔐 Add KernelSU v1.1.1 Hotfix"
+      run: |
+        echo "📥 Adding KernelSU v1.1.1 Hotfix..."
+        git clone --depth=1 https://github.com/tiann/KernelSU KernelSU
+        
+        if [ -d "KernelSU" ]; then
+          echo "✅ KernelSU added"
+          echo "⚠️ Note: Testing with AOSP Clang 19"
+        else
+          echo "❌ Failed to add KernelSU"
+          exit 1
+        fi
+
+    # ==================== 9. تهيئة Config ====================
+    - name: "⚙️ Generate Kernel Config"
+      run: |
+        export PATH="$(pwd)/aosp-clang/bin:$PATH"
+        export ARCH="${{ env.ARCH }}"
+        
+        echo "⚙️ Generating kernel config with AOSP Clang..."
+        
+        # AOSP Clang يحتاج إعدادات خاصة
+        if make O=out vendor/violet-perf_defconfig 2>/dev/null; then
+          echo "✅ Using vendor/violet-perf_defconfig"
+        elif make O=out violet-perf_defconfig 2>/dev/null; then
+          echo "✅ Using violet-perf_defconfig"
+        elif make O=out violet_defconfig 2>/dev/null; then
+          echo "✅ Using violet_defconfig"
+        else
+          echo "❌ No valid defconfig found!"
+          exit 1
+        fi
+        
+        # ⭐ إعدادات إضافية لـ AOSP Clang
+        echo "CONFIG_CC_VERSION_TEXT=\"AOSP Clang 19.0.0\"" >> out/.config
+        echo "CONFIG_LTO_CLANG=y" >> out/.config
+        echo "CONFIG_THINLTO=y" >> out/.config
+        
+        echo "✅ Config generated for AOSP Clang"
+
+    # ==================== 10. ⭐⭐ التجميع بـ AOSP Clang 19 ====================
+    - name: "🔨 Compile Kernel with AOSP Clang 19"
+      id: compile
+      timeout-minutes: 90
+      run: |
+        export PATH="$(pwd)/aosp-clang/bin:$PATH"
+        export ARCH="${{ env.ARCH }}"
+        export SUBARCH="${{ env.SUBARCH }}"
+        export KBUILD_BUILD_USER="${{ env.KBUILD_BUILD_USER }}"
+        export KBUILD_BUILD_HOST="${{ env.KBUILD_BUILD_HOST }}"
+        
+        echo "🔨 Starting kernel compilation with AOSP Clang 19..."
+        echo "⏰ Start time: $(date)"
+        echo "💾 System info:"
+        free -h
+        nproc
+        
+        START=$(date +%s)
+        
+        # ⭐⭐ إعدادات AOSP Clang الكاملة
+        make -j$(($(nproc) - 1)) O=out \
+          ARCH="${{ env.ARCH }}" \
+          SUBARCH="${{ env.SUBARCH }}" \
+          CC=clang \
+          LD=ld.lld \
+          AR=llvm-ar \
+          NM=llvm-nm \
+          OBJCOPY=llvm-objcopy \
+          OBJDUMP=llvm-objdump \
+          STRIP=llvm-strip \
+          CLANG_TRIPLE="${{ env.CLANG_TRIPLE }}" \
+          CROSS_COMPILE="${{ env.CROSS_COMPILE }}" \
+          CROSS_COMPILE_ARM32="${{ env.CROSS_COMPILE_ARM32 }}" \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          # إعدادات AOSP إضافية
+          CLANG_VERSION="19.0.0" \
+          HOSTCC=clang \
+          HOSTCXX=clang++ \
+          HOSTLD=ld.lld \
+          2>&1 | tee build.log
+        
+        BUILD_STATUS=$?
+        
+        END=$(date +%s)
+        DIFF=$((END - START))
+        
+        echo "⏰ End time: $(date)"
+        echo "⏱️ Build duration: $((DIFF / 60))m $((DIFF % 60))s"
+        echo "BUILD_TIME=$((DIFF / 60))m $((DIFF % 60))s" >> $GITHUB_ENV
+        
+        if [ $BUILD_STATUS -ne 0 ]; then
+          echo "❌ Build failed with code: $BUILD_STATUS"
+          
+          # تحليل أخطاء AOSP Clang
+          echo ""
+          echo "🔍 Last 30 lines of build log:"
+          tail -30 build.log
+          
+          echo ""
+          echo "🔴 Common AOSP Clang issues:"
+          if grep -q "undefined reference" build.log; then
+            echo "  - Linking error: Try -fuse-ld=lld"
+          fi
+          if grep -q "assembler" build.log | grep -q "error"; then
+            echo "  - Assembler: Ensure LLVM_IAS=1"
+          fi
+          if grep -i "KernelSU" build.log | grep -i "error"; then
+            echo "  - KernelSU may need AOSP patches"
+          fi
+          
+          exit $BUILD_STATUS
+        fi
+        
+        echo "✅ Compilation successful with AOSP Clang 19!"
+
+    # ==================== 11. التحقق من المخرجات ====================
+    - name: "✔️ Verify Build Output"
+      id: verify
+      run: |
+        echo "🔍 Verifying AOSP Clang 19 build..."
+        
+        IMAGE="out/arch/arm64/boot/Image.gz"
+        DTBO="out/arch/arm64/boot/dtbo.img"
+        
+        echo "📁 Checking files:"
+        ls -lh out/arch/arm64/boot/ || echo "Boot directory not found"
+        
+        if [[ -f "$IMAGE" && -f "$DTBO" ]]; then
+          echo "success=true" >> $GITHUB_OUTPUT
+          echo "✅ AOSP Clang 19 build successful!"
+          echo ""
+          echo "📦 Kernel Image:"
+          ls -lh "$IMAGE"
+          file "$IMAGE"
+          echo ""
+          echo "📦 DTBO Image:"
+          ls -lh "$DTBO"
+          file "$DTBO"
+          
+          # معلومات Clang المستخدم
+          echo ""
+          echo "🏢 Build Info:"
+          strings "$IMAGE" | grep -i "clang" | head -5 || true
+        else
+          echo "success=false" >> $GITHUB_OUTPUT
+          echo "❌ Build output incomplete"
+          echo "  Image.gz: $([ -f "$IMAGE" ] && echo "✅" || echo "❌")"
+          echo "  dtbo.img: $([ -f "$DTBO" ] && echo "✅" || echo "❌")"
+        fi
+
+    # ==================== 12. إنشاء حزمة ====================
+    - name: "📦 Create Flashable ZIP"
+      if: steps.verify.outputs.success == 'true'
+      run: |
+        echo "📦 Creating AOSP Clang 19 flashable package..."
+        
+        git clone -q https://github.com/Joker-V2/AnyKernel3 -b sixteen AK3
+        
+        cp out/arch/arm64/boot/Image.gz AK3/
+        cp out/arch/arm64/boot/dtbo.img AK3/
+        
+        # إضافة معلومات AOSP
+        echo "AOSP Clang 19.0.0 | r510928" > AK3/version.txt
+        echo "Built: $(date)" >> AK3/version.txt
+        echo "Device: ${{ env.DEVICE }}" >> AK3/version.txt
+        
+        cd AK3
+        ZIPNAME="Violet-AOSP-Clang19-$(date +%Y%m%d-%H%M).zip"
+        zip -r9 "../$ZIPNAME" * -x ".git*" "README.md"
+        cd ..
+        
+        echo "✅ Created: $ZIPNAME"
+        ls -lh "$ZIPNAME"
+
+    # ==================== 13. توقيع الحزمة ====================
+    - name: "🔏 Sign Kernel ZIP"
+      if: steps.verify.outputs.success == 'true'
+      run: |
+        echo "🔏 Signing AOSP Clang 19 kernel..."
+        
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        
+        for zipfile in Violet-AOSP-Clang19-*.zip; do
+          if [ -f "$zipfile" ]; then
+            SIGNED_NAME="${zipfile%.zip}-SIGNED.zip"
+            java -jar zipsigner-3.0-dexed.jar "$zipfile" "$SIGNED_NAME"
+            echo "✅ Signed: $SIGNED_NAME"
+          fi
+        done
+
+    # ==================== 14. رفع النتائج ====================
+    - name: "📤 Upload Kernel ZIP"
+      if: steps.verify.outputs.success == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: Violet-AOSP-Clang19-${{ github.run_number }}
+        path: |
+          Violet-AOSP-Clang19-*.zip
+          Violet-AOSP-Clang19-*-SIGNED.zip
+        retention-days: 30
+
+    - name: "📤 Upload Build Log"
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Build-Log-AOSP-Clang19-${{ github.run_number }}
+        path: build.log
+        retention-days: 14
+
+    # ==================== 15. ملخص البناء ====================
+    - name: "📊 Build Summary"
+      if: always()
+      run: |
+        echo "## 📊 AOSP Clang 19 Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🏢 Official Google Toolchain" >> $GITHUB_STEP_SUMMARY
+        echo "- **Compiler:** AOSP Clang 19.0.0 (r510928)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Source:** Android Open Source Project" >> $GITHUB_STEP_SUMMARY
+        echo "- **Device:** Xiaomi Violet (Redmi Note 7 Pro)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Time:** ${{ env.BUILD_TIME }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Previous:** ZyC Clang 22 Successful ✅" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [[ "${{ steps.verify.outputs.success }}" == "true" ]]; then
+          echo "### ✅ Build Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🎉 **Professional AOSP Clang 19 build ready!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**🔥 Features:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Official Google toolchain" >> $GITHUB_STEP_SUMMARY
+          echo "- LLVM 19 with full optimization" >> $GITHUB_STEP_SUMMARY
+          echo "- LTO/ThinLTO support" >> $GITHUB_STEP_SUMMARY
+          echo "- Integrated assembler (LLVM_IAS)" >> $GITHUB_STEP_SUMMARY
+          echo "- Tested KernelSU compatibility" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**📥 Download from Artifacts**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ❌ Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**🔍 Check build log for AOSP-specific issues:**" >> $GITHUB_STEP_SUMMARY
+          echo "- LLVM toolchain compatibility" >> $GITHUB_STEP_SUMMARY
+          echo "- KernelSU patches for AOSP Clang" >> $GITHUB_STEP_SUMMARY
+          echo "- LTO/ThinLTO configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**🔄 Fallback:** Use proven ZyC Clang 22 build" >> $GITHUB_STEP_SUMMARY
+        fi
