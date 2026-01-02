@@ -119,7 +119,8 @@ jobs:
         # Verify installation
         echo "✅ Toolchain installed:"
         ./tc/bin/clang --version | head -3
-        echo "COMPILER_VERSION=$(./tc/bin/clang --version | head -1)" >> $GITHUB_OUTPUT
+        COMPILER_VER=$(./tc/bin/clang --version | head -1)
+        echo "COMPILER_VERSION=$COMPILER_VER" >> $GITHUB_OUTPUT
 
     # ==================== ⭐ 7. DOWNLOAD KERNELSU NEXT v1.1.1 DRIVER ====================
     - name: "⭐ Download KernelSU Next v1.1.1 driver"
@@ -262,7 +263,6 @@ EOF
           echo "Total files: $(find drivers/kernelsu -type f | wc -l)"
           
           # Check required files
-          ALL_FILES_EXIST=true
           for ksu_file in ${{ env.REQUIRED_KSU_FILES }}; do
             if [ -f "drivers/kernelsu/$ksu_file" ]; then
               echo "✅ $ksu_file found"
@@ -295,7 +295,8 @@ EOF
             APK_MB=$((APK_SIZE / 1024 / 1024))
             echo "APK_SIZE=${APK_MB}MB" >> $GITHUB_ENV
             echo "✅ KernelSU APK downloaded: ${APK_MB}MB"
-            echo "APK_CHECKSUM=$(md5sum kernelsu.apk | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+            APK_CHECKSUM=$(md5sum kernelsu.apk | cut -d' ' -f1)
+            echo "APK_CHECKSUM=$APK_CHECKSUM" >> $GITHUB_OUTPUT
             
             # Verify APK
             if file kernelsu.apk | grep -q "Android"; then
@@ -349,7 +350,7 @@ EOF
         # Verify KSU is enabled
         echo "Checking KernelSU configuration..."
         KSU_CONFIG_COUNT=$(grep -c "CONFIG_KSU" out/.config || echo "0")
-        echo "KSU_CONFIG_LINES=${KSU_CONFIG_COUNT}" >> $GITHUB_OUTPUT
+        echo "KSU_CONFIG_LINES=$KSU_CONFIG_COUNT" >> $GITHUB_OUTPUT
         
         if [ $KSU_CONFIG_COUNT -gt 0 ]; then
           echo "✅ KernelSU configuration found ($KSU_CONFIG_COUNT lines)"
@@ -502,7 +503,7 @@ EOF
           echo "VERIFY_STATUS=success" >> $GITHUB_OUTPUT
           echo "KSU_IN_BINARY=$KSU_IN_BINARY" >> $GITHUB_OUTPUT
           echo "VERIFICATION_DETAILS<<EOF" >> $GITHUB_OUTPUT
-          echo "$VERIFICATION_DETAILS" >> $GITHUB_OUTPUT
+          echo -e "$VERIFICATION_DETAILS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           echo "✅ All verifications passed"
         else
@@ -535,16 +536,19 @@ EOF
         
         # Create detailed build info
         echo "Creating build information..."
-        echo "=== Kernel Build Information ===" > anykernel/build_info.txt
-        echo "Kernel: ${{ env.KERNEL_NAME }}" >> anykernel/build_info.txt
-        echo "Branch: sixteen-ksu" >> anykernel/build_info.txt
-        echo "KSU Version: ${{ env.KSU_NEXT_VERSION }}" >> anykernel/build_info.txt
-        echo "Build Date: $(date)" >> anykernel/build_info.txt
-        echo "Build Time: ${{ env.BUILD_MINUTES }}m ${{ env.BUILD_SECONDS }}s" >> anykernel/build_info.txt
-        echo "Git Commit: $(git log --oneline -1)" >> anykernel/build_info.txt
-        echo "Compiler: ${{ steps.toolchain.outputs.COMPILER_VERSION }}" >> anykernel/build_info.txt
-        echo "KSU in Binary: ${{ steps.post_verify.outputs.KSU_IN_BINARY }}" >> anykernel/build_info.txt
-        echo "Image Size: ${{ env.IMAGE_SIZE_MB }} MB" >> anykernel/build_info.txt
+        cat > anykernel/build_info.txt << EOF
+=== Kernel Build Information ===
+Kernel: ${{ env.KERNEL_NAME }}
+Branch: sixteen-ksu
+KSU Version: ${{ env.KSU_NEXT_VERSION }}
+Build Date: $(date)
+Build Time: ${{ env.BUILD_MINUTES }}m ${{ env.BUILD_SECONDS }}s
+Git Commit: $(git log --oneline -1)
+Compiler: ${{ steps.toolchain.outputs.COMPILER_VERSION }}
+KSU in Binary: ${{ steps.post_verify.outputs.KSU_IN_BINARY }}
+Image Size: ${{ env.IMAGE_SIZE_MB }} MB
+EOF
+        
         if [ -f "kernelsu.apk" ]; then
           echo "APK Checksum: ${{ steps.download_apk.outputs.APK_CHECKSUM }}" >> anykernel/build_info.txt
         fi
