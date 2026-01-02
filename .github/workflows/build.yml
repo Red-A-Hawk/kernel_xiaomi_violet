@@ -72,12 +72,20 @@ jobs:
         export KBUILD_BUILD_USER=Red-A-Hawk
         export KBUILD_BUILD_HOST=GitHub-Actions
         
+        # Fix for LLVM Broken Pipe error
+        export KCFLAGS="-w"
+        export KCPPFLAGS="-w"
+        
         START=$(date +%s)
         echo "🔨 Building kernel with KernelSU Next..."
         
-        make -j$(nproc) O=out \
+        # Reduce parallel jobs to avoid memory issues
+        JOBS=$(($(nproc) - 1))
+        [ $JOBS -lt 2 ] && JOBS=2
+        
+        make -j${JOBS} O=out \
           ARCH=arm64 \
-          CC="ccache clang" \
+          CC=clang \
           CLANG_TRIPLE=aarch64-linux-gnu- \
           CROSS_COMPILE=aarch64-linux-gnu- \
           CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
