@@ -1,46 +1,62 @@
-name: Diagnose Kernel Build Stop
+name: Build Kernel (Fixed Toolchain)
 
 on:
   workflow_dispatch:
 
 jobs:
-  diagnose:
+  build:
     runs-on: ubuntu-22.04
 
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+
     steps:
-    - name: Checkout
+    - name: Checkout kernel source
       uses: actions/checkout@v4
 
-    - name: Where am I?
+    - name: Install dependencies
       run: |
-        pwd
-        ls -lah
+        sudo apt update
+        sudo apt install -y \
+          git bc bison flex libssl-dev \
+          make curl zip unzip \
+          python3 openjdk-11-jre \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi
 
-    - name: Check kernel root
+    - name: Download Proton Clang 17
       run: |
-        ls -lah Makefile || echo "NO MAKEFILE"
-        head -n 5 Makefile || true
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-    - name: Check defconfig exists
+    - name: Setup toolchain
       run: |
-        ls arch/arm64/configs/vendor/violet-perf_defconfig || echo "DEFCONFIG NOT FOUND"
+        echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    - name: Try make help
+    - name: Setup KernelSU Next (SUSFS included)
       run: |
-        make help || echo "MAKE FAILED"
+        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh | bash -
 
-    - name: Try make defconfig only
+    - name: Load defconfig
       run: |
-        make vendor/violet-perf_defconfig || echo "DEFCONFIG FAILED"
+        make vendor/violet-perf_defconfig
 
-    - name: List scripts directory
+    - name: Build scripts
       run: |
-        ls scripts || echo "NO SCRIPTS DIR"
+        make scripts
 
-    - name: Check scripts/config
+    - name: Enable KernelSU + SUSFS
       run: |
-        ls scripts/config || echo "NO scripts/config"
+        scripts/config --enable CONFIG_KSU
+        scripts/config --enable CONFIG_SUSFS
+        scripts/config --enable CONFIG_KSU_SUSFS
+        make olddefconfig
 
-    - name: Explicit exit
+    - name: Build kernel
       run: |
-        echo "Reached end of workflow"
+        make -j$(nproc)
