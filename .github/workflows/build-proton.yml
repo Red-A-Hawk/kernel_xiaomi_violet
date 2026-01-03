@@ -1,0 +1,67 @@
+name: Build Kernel (violet | KernelSU Next + SUSFS | Proton Clang)
+
+on:
+  push:
+    branches:
+      - sixteen
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison build-essential curl flex git \
+            libssl-dev libelf-dev lld llvm \
+            python3 zip unzip
+
+      - name: Download Proton Clang
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+
+      - name: Setup toolchain env
+        run: |
+          echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "LD=ld.lld" >> $GITHUB_ENV
+          echo "AR=llvm-ar" >> $GITHUB_ENV
+          echo "NM=llvm-nm" >> $GITHUB_ENV
+          echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
+          echo "OBJDUMP=llvm-objdump" >> $GITHUB_ENV
+          echo "STRIP=llvm-strip" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+      - name: Setup KernelSU Next (official)
+        run: |
+          git clone https://github.com/KernelSU-Next/KernelSU-Next ksu
+          bash ksu/scripts/setup.sh
+
+      - name: Load defconfig
+        run: |
+          make O=out vendor/violet-perf_defconfig
+
+      - name: Enable KernelSU + SUSFS
+        run: |
+          scripts/config --file out/.config \
+            -e CONFIG_KSU \
+            -e CONFIG_KSU_SUSFS \
+            -e CONFIG_SUSFS
+          make O=out olddefconfig
+
+      - name: Build kernel
+        run: |
+          make -j$(nproc) O=out \
+            LLVM=1 LLVM_IAS=1
+
+      - name: Upload Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image
+          path: out/arch/arm64/boot/Image
