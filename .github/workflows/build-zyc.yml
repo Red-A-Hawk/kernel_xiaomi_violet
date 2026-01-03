@@ -1,0 +1,114 @@
+name: Build Kernel (violet | KSU Next + SUSFS | ZyCromerZ Clang - Fixed)
+
+on:
+  push:
+    branches:
+      - sixteen
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup 16GB swap
+        run: |
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile 2>/dev/null || true
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison flex libssl-dev \
+            make gcc gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
+            binutils-aarch64-linux-gnu \
+            binutils-arm-linux-gnueabi \
+            ccache curl git zip unzip lld
+
+      - name: Download ZyCromerZ Clang 22
+        run: |
+          rm -rf clang
+          mkdir clang
+          cd clang
+          curl -L https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz | tar -xz
+          echo "CLANG_PATH=$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_ENV
+          echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Verify toolchain
+        run: |
+          clang --version
+          ld.lld --version
+          which aarch64-linux-gnu-gcc
+
+      - name: Clean workspace
+        run: |
+          rm -rf out
+          mkdir -p .ccache
+          make clean
+          make mrproper
+
+      - name: Load defconfig
+        run: |
+          make O=out ARCH=arm64 vendor/violet-perf_defconfig
+
+      - name: Enable KernelSU + SUSFS
+        run: |
+          scripts/config --file out/.config \
+            -e CONFIG_KSU \
+            -e CONFIG_KSU_SUSFS
+          make O=out ARCH=arm64 olddefconfig
+
+      - name: Build kernel with limited resources
+        run: |
+          # إعداد متغيرات البيئة
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          export CCACHE_COMPRESS=1
+          export CCACHE_MAXSIZE=10G
+          export CCACHE_SLOPPINESS=time_macros,include_file_mtime
+          
+          # عدد jobs آمن
+          JOBS=3
+          echo "🚀 Building with $JOBS jobs using ZyCromerZ Clang"
+          
+          # التجميع مع مراقبة الذاكرة
+          make -j$JOBS \
+            O=out \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CC="ccache clang" \
+            LD=ld.lld \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          
+          # إحصائيات
+          echo "📊 Build completed!"
+          ccache -s
+
+      - name: Upload Image
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image-ZyC-Fixed
+          path: out/arch/arm64/boot/Image*
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Logs-Error
+          path: |
+            out/.config
+            out/build.log
