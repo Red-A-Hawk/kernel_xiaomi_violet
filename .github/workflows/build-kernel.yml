@@ -51,22 +51,11 @@ jobs:
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
     # =========================
-    # KernelSU Next (official)
+    # KernelSU Next (with SUSFS)
     # =========================
     - name: Setup KernelSU Next
       run: |
         curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh | bash -
-
-    # =========================
-    # SUSFS (real & stable)
-    # =========================
-    - name: Setup SUSFS
-      run: |
-        git clone https://github.com/infectedmushi/susfs4ksu
-        patch -p1 < susfs4ksu/kernel_patches/00_add_susfs.patch
-        patch -p1 < susfs4ksu/kernel_patches/01_kernelsu_hook.patch
-        cp susfs4ksu/kernel_patches/fs/susfs.c fs/
-        cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
 
     # =========================
     # Defconfig
