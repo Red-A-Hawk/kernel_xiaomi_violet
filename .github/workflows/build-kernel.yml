@@ -1,0 +1,135 @@
+name: Build KernelSU Next + SUSFS (violet)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - sixteen
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      KERNEL_DEFCONFIG: vendor/violet-perf_defconfig
+      CLANG_PATH: ${{ github.workspace }}/clang
+
+    steps:
+    # =========================
+    # Checkout
+    # =========================
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+
+    # =========================
+    # Dependencies
+    # =========================
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git bc bison flex libssl-dev \
+          make curl zip unzip \
+          openjdk-11-jre python3
+
+    # =========================
+    # Clang ZyCromerZ 22
+    # =========================
+    - name: Download Clang
+      run: |
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz
+        mkdir clang
+        tar -xf Clang-22.0.0git-20250928.tar.gz -C clang --strip-components=1
+
+    - name: Setup Clang environment
+      run: |
+        echo "PATH=$CLANG_PATH/bin:$PATH" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+    # =========================
+    # KernelSU Next (official)
+    # =========================
+    - name: Setup KernelSU Next
+      run: |
+        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh | bash -
+
+    # =========================
+    # SUSFS (real & stable)
+    # =========================
+    - name: Setup SUSFS
+      run: |
+        git clone https://github.com/infectedmushi/susfs4ksu
+        patch -p1 < susfs4ksu/kernel_patches/00_add_susfs.patch
+        patch -p1 < susfs4ksu/kernel_patches/01_kernelsu_hook.patch
+        cp susfs4ksu/kernel_patches/fs/susfs.c fs/
+        cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+
+    # =========================
+    # Defconfig
+    # =========================
+    - name: Load defconfig
+      run: |
+        make $KERNEL_DEFCONFIG
+
+    # =========================
+    # Enable KernelSU + SUSFS
+    # =========================
+    - name: Enable KernelSU + SUSFS configs
+      run: |
+        scripts/config --enable CONFIG_KSU
+        scripts/config --enable CONFIG_SUSFS
+        scripts/config --enable CONFIG_KSU_SUSFS
+        scripts/config --enable CONFIG_SUSFS_HIDE_KSU
+        scripts/config --enable CONFIG_SUSFS_SPOOF_UNAME
+        scripts/config --enable CONFIG_SUSFS_SPOOF_CMDLINE
+        scripts/config --enable CONFIG_SUSFS_SPOOF_RELEASE
+        make olddefconfig
+
+    # =========================
+    # Build kernel
+    # =========================
+    - name: Build kernel
+      run: |
+        make -j$(nproc)
+
+    # =========================
+    # AnyKernel3
+    # =========================
+    - name: Clone AnyKernel3
+      run: |
+        git clone https://github.com/Joker-V2/AnyKernel3 -b sixteen AnyKernel3
+
+    - name: Copy kernel image
+      run: |
+        cp arch/arm64/boot/Image.gz-dtb AnyKernel3/
+
+    - name: Create flashable zip
+      run: |
+        cd AnyKernel3
+        zip -r9 ../KernelSU-Next-violet.zip *
+
+    # =========================
+    # ZipSigner
+    # =========================
+    - name: Download ZipSigner
+      run: |
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+
+    - name: Sign zip
+      run: |
+        java -jar zipsigner-3.0-dexed.jar \
+          KernelSU-Next-violet.zip \
+          KernelSU-Next-violet-signed.zip
+
+    # =========================
+    # Upload
+    # =========================
+    - name: Upload signed kernel
+      uses: actions/upload-artifact@v4
+      with:
+        name: KernelSU-Next-violet
+        path: KernelSU-Next-violet-signed.zip
