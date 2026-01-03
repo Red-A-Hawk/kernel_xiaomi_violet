@@ -1,8 +1,10 @@
-name: Build Kernel (violet | ZyC Clang + KernelSU Next + SUSFS)
+name: Build Kernel (violet | KernelSU Next + SUSFS | ZyC Clang)
 
 on:
   push:
-    branches: [ sixteen ]
+    branches:
+      - sixteen
+  workflow_dispatch:
 
 jobs:
   build:
@@ -16,61 +18,23 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y \
-          bc bison flex libssl-dev \
-          build-essential \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi \
-          binutils-aarch64-linux-gnu \
-          binutils-arm-linux-gnueabi \
-          python3
+          bc bison flex git curl zip unzip \
+          make gcc libc6-dev libssl-dev \
+          ccache python3
 
     - name: Download ZyCromerZ Clang 22
       run: |
-        wget https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz
-        tar -xf Clang-22.0.0git-20250928.tar.gz
-        mv Clang-* clang
+        curl -L \
+        https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz \
+        -o clang.tar.gz
+        mkdir clang
+        tar -xf clang.tar.gz -C clang --strip-components=1
 
     - name: Setup toolchain env
       run: |
         echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
         echo "CC=clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "AR=llvm-ar" >> $GITHUB_ENV
-        echo "NM=llvm-nm" >> $GITHUB_ENV
-        echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
-        echo "OBJDUMP=llvm-objdump" >> $GITHUB_ENV
-        echo "STRIP=llvm-strip" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "ARCH=arm64" >> $GITHUB_ENV
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
-
-    - name: Setup KernelSU Next (official)
-      run: |
-        git clone https://github.com/KernelSU-Next/KernelSU-Next ksu
-        bash ksu/scripts/setup.sh
-
-    - name: Load defconfig
-      run: |
-        make O=out ARCH=arm64 vendor/violet-perf_defconfig
-
-    - name: Enable KernelSU + SUSFS
-      run: |
-        scripts/config --file out/.config \
-          -e CONFIG_KSU \
-          -e CONFIG_KSU_SUSFS \
-          -e CONFIG_SUSFS \
-          -e CONFIG_SUSFS_SUS_MAPS
-        make O=out ARCH=arm64 olddefconfig
-
-    - name: Build kernel (LLVM)
-      run: |
-        make -j$(nproc) \
-          O=out \
-          ARCH=arm64 \
-          LLVM=1 \
-          LLVM_IAS=1
-
-    - name: Upload Image
-      uses: actions/upload-artifact@v4
-      with:
-        name: Image
-        path: out/arch/arm64/boot/Image
