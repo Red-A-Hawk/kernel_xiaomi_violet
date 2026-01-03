@@ -1,4 +1,4 @@
-name: Build Kernel with KernelSU
+name: Build Kernel
 
 on:
   workflow_dispatch:
@@ -12,8 +12,6 @@ on:
           - v1.1.1
           - v1.1.0
           - v1.0.0
-          - latest
-          - dev
           - none
       clean_build:
         description: 'Clean build'
@@ -23,672 +21,291 @@ on:
 
 jobs:
   build:
-    name: Build Kernel
     runs-on: ubuntu-22.04
     
-    env:
-      KERNEL_DIR: ${{ github.workspace }}
-      OUT_DIR: ${{ github.workspace }}/out
-      KERNEL_NAME: "xcalibur-v5.4-violet-dynamic"
-      ARCH: arm64
-      CONFIG: "vendor/violet-perf_defconfig"
-    
     steps:
-      # ========================================
-      # 1. الحصول على مصدر النواة
-      # ========================================
-      - name: Checkout kernel source
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-      
-      # ========================================
-      # 2. إعداد بيئة البناء الأساسية
-      # ========================================
-      - name: Setup build environment
-        run: |
-          echo "📦 Setting up build environment..."
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            flex \
-            bison \
-            libssl-dev \
-            libelf-dev \
-            bc \
-            rsync \
-            kmod \
-            cpio \
-            wget \
-            curl \
-            tar \
-            xz-utils \
-            python3 \
-            python3-pip \
-            ccache \
-            libncurses-dev \
-            lz4 \
-            lzop \
-            gcc-multilib \
-            g++-multilib \
-            device-tree-compiler \
-            u-boot-tools
+    # ========================================
+    # 1. تحميل مصدر النواة
+    # ========================================
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+    
+    # ========================================
+    # 2. تثبيت المتطلبات الأساسية
+    # ========================================
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          ccache \
+          wget \
+          tar \
+          xz-utils \
+          python3 \
+          bc \
+          flex \
+          bison \
+          libssl-dev \
+          libelf-dev \
+          libncurses-dev \
+          lz4 \
+          lzop
+        
+        # إعداد ccache
+        sudo /usr/sbin/update-ccache-symlinks
+        echo "/usr/lib/ccache" >> $GITHUB_PATH
+        ccache --max-size=2G
+        ccache --zero-stats
+    
+    # ========================================
+    # 3. تحميل وتثبيت Clang
+    # ========================================
+    - name: Install Clang toolchain
+      id: clang
+      run: |
+        echo "=== Downloading Clang ==="
+        
+        # تحميل التولشين
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928-linux-x86_64.tar.gz
+        
+        # استخراج
+        echo "Extracting toolchain..."
+        tar -xzf Clang-22.0.0git-20250928-linux-x86_64.tar.gz
+        
+        # اسم المجلد المستخرج
+        CLANG_DIR="Clang-22.0.0git-20250928-linux-x86_64"
+        
+        # التحقق
+        if [ -d "$CLANG_DIR" ]; then
+          echo "Toolchain directory: $CLANG_DIR"
           
-          # إعداد ccache
-          sudo /usr/sbin/update-ccache-symlinks
-          echo "/usr/lib/ccache" >> $GITHUB_PATH
-          ccache --max-size=2G
-          ccache --zero-stats
-          echo "✅ Build environment ready"
-      
-      # ========================================
-      # 3. استعادة ذاكرة التخزين المؤقت
-      # ========================================
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ${{ runner.os }}-ccache-kernel-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-kernel-
-      
-      # ========================================
-      # 4. تثبيت ZyC Clang (الطريقة المؤكدة)
-      # ========================================
-      - name: Install ZyC Clang
-        id: install-clang
-        run: |
-          echo "========================================"
-          echo "       Installing ZyC Clang            "
-          echo "========================================"
+          # إضافة إلى PATH
+          CLANG_PATH="$(pwd)/$CLANG_DIR/bin"
+          echo "$CLANG_PATH" >> $GITHUB_PATH
           
-          # استخدام مسار بسيط في home directory
-          CLANG_DIR="$HOME/zyc-clang"
-          mkdir -p "$CLANG_DIR"
-          cd "$CLANG_DIR"
+          # اختبار
+          echo "Testing clang..."
+          "$CLANG_PATH/clang" --version | head -3
           
-          # الرابط المؤكد الذي يعمل
-          CLANG_URL="https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928-linux-x86_64.tar.gz"
-          
-          echo "📥 Downloading from:"
-          echo "$CLANG_URL"
+          # حفظ المسار للمراحل التالية
+          echo "clang_path=$CLANG_PATH" >> $GITHUB_OUTPUT
+        else
+          echo "ERROR: Toolchain extraction failed!"
+          exit 1
+        fi
+        
+        # تنظيف
+        rm -f Clang-22.0.0git-20250928-linux-x86_64.tar.gz
+        
+        echo "=== Clang installation complete ==="
+    
+    # ========================================
+    # 4. تنظيف البناء إذا مطلوب
+    # ========================================
+    - name: Clean build (optional)
+      if: ${{ inputs.clean_build == true }}
+      run: |
+        echo "Cleaning previous build..."
+        make clean 2>/dev/null || true
+        make mrproper 2>/dev/null || true
+        rm -rf out
+    
+    # ========================================
+    # 5. إعداد KernelSU (إذا مطلوب)
+    # ========================================
+    - name: Setup KernelSU (optional)
+      if: ${{ inputs.kernelsu_version != 'none' }}
+      run: |
+        echo "=== Setting up KernelSU ${{ inputs.kernelsu_version }} ==="
+        
+        # إنشاء مجلد مؤقت
+        TEMP_DIR=$(mktemp -d)
+        cd "$TEMP_DIR"
+        
+        # تحميل KernelSU
+        case "${{ inputs.kernelsu_version }}" in
+          v1.1.1|v1.1.0|v1.0.0)
+            echo "Downloading version ${{ inputs.kernelsu_version }}..."
+            wget -q https://github.com/KernelSU-Next/KernelSU-Next/releases/download/${{ inputs.kernelsu_version }}/KernelSU-${{ inputs.kernelsu_version }}.zip
+            unzip -q KernelSU-${{ inputs.kernelsu_version }}.zip
+            cd "KernelSU-${{ inputs.kernelsu_version }}"
+            ;;
+          *)
+            echo "Cloning latest version..."
+            git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git
+            cd KernelSU-Next
+            ;;
+        esac
+        
+        # تطبيق KernelSU
+        if [ -f "kernel/setup.sh" ]; then
+          cd kernel
+          chmod +x setup.sh
+          ./setup.sh "$GITHUB_WORKSPACE"
+          echo "KernelSU applied successfully"
+        else
+          echo "WARNING: setup.sh not found"
+        fi
+        
+        # تنظيف
+        cd /
+        rm -rf "$TEMP_DIR"
+    
+    # ========================================
+    # 6. توليد إعدادات النواة
+    # ========================================
+    - name: Generate kernel config
+      run: |
+        echo "=== Generating kernel config ==="
+        
+        # توليد defconfig
+        make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- vendor/violet-perf_defconfig
+        
+        if [ $? -eq 0 ]; then
+          echo "Config generated successfully"
+        else
+          echo "ERROR: Config generation failed"
+          exit 1
+        fi
+    
+    # ========================================
+    # 7. بناء النواة
+    # ========================================
+    - name: Build kernel
+      id: build
+      run: |
+        echo "=== Building kernel ==="
+        
+        # وقت البدء
+        START=$(date +%s)
+        
+        # عدد الوظائف المتوازية
+        JOBS=$(nproc)
+        echo "Building with $JOBS parallel jobs"
+        
+        # بناء النواة
+        make -j$JOBS \
+          ARCH=arm64 \
+          CC="ccache clang" \
+          CLANG_TRIPLE="aarch64-linux-gnu-" \
+          CROSS_COMPILE="aarch64-linux-gnu-" \
+          CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
+          LLVM=1 \
+          LLVM_IAS=1
+        
+        # وقت الانتهاء
+        END=$(date +%s)
+        TIME=$((END - START))
+        
+        echo "Build time: $TIME seconds"
+        echo "build_time=$TIME" >> $GITHUB_OUTPUT
+        
+        if [ $? -eq 0 ]; then
+          echo "=== Build successful ==="
+        else
+          echo "=== Build failed ==="
+          exit 1
+        fi
+    
+    # ========================================
+    # 8. التحقق من المخرجات
+    # ========================================
+    - name: Verify outputs
+      run: |
+        echo "=== Verifying build outputs ==="
+        
+        # التحقق من وجود صورة النواة
+        if [ -f "arch/arm64/boot/Image.gz" ]; then
+          SIZE=$(du -h "arch/arm64/boot/Image.gz" | cut -f1)
+          echo "✅ Kernel image: $SIZE"
+          echo "kernel_size=$SIZE" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Kernel image not found!"
+          exit 1
+        fi
+        
+        # التحقق من DTBO (اختياري)
+        if [ -f "arch/arm64/boot/dtbo.img" ]; then
+          DTBO_SIZE=$(du -h "arch/arm64/boot/dtbo.img" | cut -f1)
+          echo "✅ DTBO image: $DTBO_SIZE"
+          echo "dtbo_size=$DTBO_SIZE" >> $GITHUB_OUTPUT
+        fi
+    
+    # ========================================
+    # 9. إنشاء حزمة AnyKernel
+    # ========================================
+    - name: Create AnyKernel package
+      run: |
+        echo "=== Creating AnyKernel package ==="
+        
+        # إنشاء مجلد مؤقت
+        AK_DIR="/tmp/anykernel"
+        rm -rf "$AK_DIR"
+        mkdir -p "$AK_DIR"
+        
+        # Clone AnyKernel3
+        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3.git -b sixteen "$AK_DIR"
+        
+        # نسخ ملفات النواة
+        cp arch/arm64/boot/Image.gz "$AK_DIR/"
+        
+        if [ -f "arch/arm64/boot/dtbo.img" ]; then
+          cp arch/arm64/boot/dtbo.img "$AK_DIR/"
+        fi
+        
+        # إنشاء ملف ZIP
+        cd "$AK_DIR"
+        ZIP_NAME="kernel-$(date +%Y%m%d-%H%M).zip"
+        zip -r9 "$ZIP_NAME" ./*
+        
+        # نقل الملف
+        mv "$ZIP_NAME" "$HOME/"
+        FINAL_ZIP="$HOME/$ZIP_NAME"
+        
+        # معلومات الملف
+        ZIP_SIZE=$(du -h "$FINAL_ZIP" | cut -f1)
+        ZIP_MD5=$(md5sum "$FINAL_ZIP" | cut -d' ' -f1)
+        
+        echo "✅ Package created: $ZIP_NAME ($ZIP_SIZE)"
+        echo "zip_path=$FINAL_ZIP" >> $GITHUB_OUTPUT
+        echo "zip_size=$ZIP_SIZE" >> $GITHUB_OUTPUT
+        echo "zip_md5=$ZIP_MD5" >> $GITHUB_OUTPUT
+        
+        # تنظيف
+        rm -rf "$AK_DIR"
+    
+    # ========================================
+    # 10. رفع النتائج
+    # ========================================
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-build
+        path: |
+          arch/arm64/boot/Image.gz
+          ${{ env.HOME }}/kernel-*.zip
+        retention-days: 7
+    
+    # ========================================
+    # 11. عرض النتائج
+    # ========================================
+    - name: Show results
+      if: always()
+      run: |
+        echo "=== Build Results ==="
+        
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ BUILD SUCCESSFUL"
           echo ""
-          
-          # تنزيل مع إظهار التقدم
-          wget --progress=dot:giga "$CLANG_URL" -O clang.tar.gz
-          
-          # التحقق من التنزيل
-          if [ ! -f "clang.tar.gz" ]; then
-            echo "❌ Download failed!"
-            exit 1
-          fi
-          
+          echo "Output files:"
+          echo "1. Kernel image: arch/arm64/boot/Image.gz"
+          echo "2. Flashable ZIP: $HOME/kernel-*.zip"
           echo ""
-          echo "📂 Extracting toolchain..."
-          
-          # استخراج أولاً لمشاهدة الهيكل
-          tar -xzf clang.tar.gz
-          
+          echo "Build time: ${{ steps.build.outputs.build_time }} seconds"
+        else
+          echo "❌ BUILD FAILED"
           echo ""
-          echo "📁 Directory structure after extraction:"
-          ls -la
-          echo ""
-          
-          # البحث عن ملف clang
-          echo "🔍 Searching for clang binary..."
-          find . -type f -name "clang" | head -5
-          
-          # افتراض أن clang في bin/
-          # غالباً سيكون في مجلد مثل Clang-22.0.0git-20250928-linux-x86_64/bin/
-          CLANG_BIN=$(find . -type f -name "clang" -path "*/bin/*" | head -1)
-          
-          if [ -z "$CLANG_BIN" ]; then
-            CLANG_BIN=$(find . -type f -name "clang" | head -1)
-          fi
-          
-          if [ -n "$CLANG_BIN" ]; then
-            echo ""
-            echo "✅ Found clang at: $CLANG_BIN"
-            
-            # الحصول على المسار الأساسي
-            CLANG_BASE_DIR=$(dirname "$(dirname "$CLANG_BIN")")
-            echo "Base directory: $CLANG_BASE_DIR"
-            
-            # نسخ كل شيء إلى CLANG_DIR
-            cp -r "$CLANG_BASE_DIR"/* ./
-            
-            # التحقق النهائي
-            if [ -f "./bin/clang" ]; then
-              echo "🎉 Clang ready at: $CLANG_DIR/bin/clang"
-              echo ""
-              echo "📊 Clang version:"
-              ./bin/clang --version | head -3
-              
-              # إخراج المعلومات
-              echo "clang_dir=$CLANG_DIR/bin" >> $GITHUB_OUTPUT
-              
-              # إضافة إلى PATH
-              echo "$CLANG_DIR/bin" >> $GITHUB_PATH
-            else
-              # إنشاء رابط إذا كان clang في مكان آخر
-              if [ -f "./clang" ]; then
-                mkdir -p ./bin
-                cp ./clang ./bin/
-                echo "✅ Created bin/clang"
-                echo "clang_dir=$CLANG_DIR/bin" >> $GITHUB_OUTPUT
-                echo "$CLANG_DIR/bin" >> $GITHUB_PATH
-              fi
-            fi
-          else
-            echo "❌ Could not find clang binary!"
-            echo "Trying alternative method..."
-            
-            # طريقة بديلة: استخراج مباشر
-            rm -rf "$CLANG_DIR"/*
-            tar -xzf clang.tar.gz --strip-components=1
-            
-            if [ -f "./bin/clang" ]; then
-              echo "✅ Clang found after strip-components"
-              echo "clang_dir=$CLANG_DIR/bin" >> $GITHUB_OUTPUT
-              echo "$CLANG_DIR/bin" >> $GITHUB_PATH
-            else
-              echo "❌ All methods failed!"
-              exit 1
-            fi
-          fi
-          
-          echo ""
-          echo "✅ Toolchain installation completed!"
-          echo "Path: $CLANG_DIR/bin"
-          
-          # تنظيف
-          rm -f clang.tar.gz
-      
-      # ========================================
-      # 5. إعداد KernelSU (اختياري)
-      # ========================================
-      - name: Setup KernelSU
-        id: setup-kernelsu
-        if: ${{ inputs.kernelsu_version != 'none' }}
-        run: |
-          echo "========================================"
-          echo "       Setting up KernelSU              "
-          echo "========================================"
-          echo "Version: ${{ inputs.kernelsu_version }}"
-          echo ""
-          
-          KERNEL_DIR="${{ env.KERNEL_DIR }}"
-          KSU_VERSION="${{ inputs.kernelsu_version }}"
-          
-          # إنشاء مجلد مؤقت
-          KSU_TEMP=$(mktemp -d)
-          cd "$KSU_TEMP"
-          
-          # معالجة كل إصدار
-          case "$KSU_VERSION" in
-            v1.1.1|v1.1.0|v1.0.0)
-              echo "📦 Downloading KernelSU $KSU_VERSION..."
-              
-              # رابط مباشر للإصدارات
-              RELEASE_URL="https://github.com/KernelSU-Next/KernelSU-Next/releases/download/$KSU_VERSION/KernelSU-$KSU_VERSION.zip"
-              
-              if wget -q --show-progress "$RELEASE_URL" -O kernelsu.zip; then
-                echo "📂 Extracting..."
-                unzip -q kernelsu.zip
-                
-                KSU_SRC="KernelSU-$KSU_VERSION"
-                
-                if [ -d "$KSU_SRC" ]; then
-                  echo "✅ Downloaded successfully"
-                else
-                  # ربما تم استخراج مباشرة
-                  KSU_SRC="."
-                fi
-              else
-                echo "❌ Download failed, trying git clone..."
-                git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git
-                KSU_SRC="KernelSU-Next"
-              fi
-              ;;
-              
-            latest|stable)
-              echo "⬇️ Cloning latest stable..."
-              git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git
-              KSU_SRC="KernelSU-Next"
-              ;;
-              
-            dev)
-              echo "🧪 Cloning dev branch..."
-              git clone --depth=1 --branch=dev https://github.com/KernelSU-Next/KernelSU-Next.git
-              KSU_SRC="KernelSU-Next"
-              ;;
-              
-            *)
-              echo "⚠️ Unknown version, using v1.1.1"
-              wget -q https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v1.1.1/KernelSU-v1.1.1.zip -O kernelsu.zip
-              unzip -q kernelsu.zip
-              KSU_SRC="KernelSU-v1.1.1"
-              ;;
-          esac
-          
-          # الانتقال إلى مجلد kernel
-          cd "$KSU_SRC"
-          
-          echo ""
-          echo "🔨 Applying KernelSU to kernel..."
-          
-          # البحث عن سكريبت التطبيق
-          if [ -f "kernel/setup.sh" ]; then
-            cd kernel
-            chmod +x setup.sh
-            ./setup.sh "$KERNEL_DIR"
-          elif [ -f "kernel/kernel_patch.sh" ]; then
-            cd kernel
-            chmod +x kernel_patch.sh
-            ./kernel_patch.sh "$KERNEL_DIR"
-          elif [ -f "setup.sh" ]; then
-            chmod +x setup.sh
-            ./setup.sh "$KERNEL_DIR"
-          else
-            echo "❌ No setup script found!"
-            ls -la
-            exit 1
-          fi
-          
-          # التحقق من التطبيق
-          echo ""
-          echo "🔍 Verifying KernelSU application..."
-          if [ -f "$KERNEL_DIR/drivers/kernelsu/su.c" ] || [ -d "$KERNEL_DIR/drivers/kernelsu" ]; then
-            echo "✅ KernelSU applied successfully!"
-          else
-            echo "⚠️ KernelSU files not found, but continuing..."
-          fi
-          
-          # تنظيف
-          cd /
-          rm -rf "$KSU_TEMP"
-          
-          echo ""
-          echo "✅ KernelSU setup completed!"
-      
-      # ========================================
-      # 6. تنظيف البناء إذا مطلوب
-      # ========================================
-      - name: Clean build
-        if: ${{ inputs.clean_build == true }}
-        run: |
-          echo "🧹 Cleaning previous build..."
-          
-          cd "${{ env.KERNEL_DIR }}"
-          
-          # تنظيف المخرجات
-          rm -rf out
-          
-          # تنظيف المصادر
-          make clean 2>/dev/null || true
-          make mrproper 2>/dev/null || true
-          
-          echo "✅ Clean completed"
-      
-      # ========================================
-      # 7. إنشاء مجلد المخرجات
-      # ========================================
-      - name: Create output directory
-        run: |
-          echo "📁 Creating output directory..."
-          mkdir -p "${{ env.OUT_DIR }}"
-          echo "✅ Created: ${{ env.OUT_DIR }}"
-      
-      # ========================================
-      # 8. توليد ملف التكوين
-      # ========================================
-      - name: Generate kernel config
-        id: generate-config
-        run: |
-          echo "⚙️ Generating kernel configuration..."
-          
-          cd "${{ env.KERNEL_DIR }}"
-          
-          echo "Running: make O=${{ env.OUT_DIR }} ARCH=${{ env.ARCH }} ${{ env.CONFIG }}"
-          
-          make O="${{ env.OUT_DIR }}" \
-               ARCH="${{ env.ARCH }}" \
-               "${{ env.CONFIG }}"
-          
-          if [ $? -eq 0 ]; then
-            echo "✅ Config generated successfully"
-            
-            # عرض معلومات التكوين
-            if [ -f "${{ env.OUT_DIR }}/.config" ]; then
-              echo ""
-              echo "📋 Config summary:"
-              echo "------------------"
-              grep -E "CONFIG_KSU=|CONFIG_LOCALVERSION=|CONFIG_CC_VERSION_TEXT=" \
-                "${{ env.OUT_DIR }}/.config" || true
-            fi
-          else
-            echo "❌ Config generation failed!"
-            exit 1
-          fi
-      
-      # ========================================
-      # 9. بناء النواة
-      # ========================================
-      - name: Build kernel
-        id: build-kernel
-        run: |
-          echo "========================================"
-          echo "           Building Kernel             "
-          echo "========================================"
-          
-          cd "${{ env.KERNEL_DIR }}"
-          
-          # معلومات النظام
-          CORES=$(nproc)
-          echo "🖥️  CPU Cores: $CORES"
-          echo "📦 Using clang from: ${{ steps.install-clang.outputs.clang_dir }}"
-          echo ""
-          
-          # وقت البدء
-          START_TIME=$(date +%s)
-          
-          # تحديد عدد الوظائف
-          JOBS=$((CORES * 2))
-          if [ $JOBS -gt 16 ]; then
-            JOBS=16
-          fi
-          
-          echo "🔨 Building with $JOBS parallel jobs..."
-          echo ""
-          
-          # أمر البناء
-          set -o pipefail
-          
-          make -j$JOBS \
-            O="${{ env.OUT_DIR }}" \
-            ARCH="${{ env.ARCH }}" \
-            CC="ccache clang" \
-            CLANG_TRIPLE="aarch64-linux-gnu-" \
-            CROSS_COMPILE="aarch64-linux-gnu-" \
-            CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
-            LLVM=1 \
-            LLVM_IAS=1 2>&1 | tee build_output.log
-          
-          BUILD_STATUS=$?
-          
-          # وقت الانتهاء
-          END_TIME=$(date +%s)
-          BUILD_TIME=$((END_TIME - START_TIME))
-          
-          echo ""
-          echo "⏱️  Build time: $BUILD_TIME seconds"
-          
-          if [ $BUILD_STATUS -eq 0 ]; then
-            echo "✅ Kernel built successfully!"
-            echo "build_status=success" >> $GITHUB_OUTPUT
-            echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
-          else
-            echo "❌ Kernel build failed!"
-            echo ""
-            echo "📋 Last 20 lines of build output:"
-            tail -n 20 build_output.log
-            exit 1
-          fi
-      
-      # ========================================
-      # 10. التحقق من المخرجات
-      # ========================================
-      - name: Verify build outputs
-        id: verify-outputs
-        run: |
-          echo "🔍 Verifying build outputs..."
-          
-          KERNEL_IMAGE="${{ env.OUT_DIR }}/arch/arm64/boot/Image.gz"
-          DTBO_IMAGE="${{ env.OUT_DIR }}/arch/arm64/boot/dtbo.img"
-          
-          # التحقق من صورة النواة
-          if [ -f "$KERNEL_IMAGE" ]; then
-            KERNEL_SIZE=$(du -h "$KERNEL_IMAGE" | cut -f1)
-            echo "✅ Kernel Image: $KERNEL_SIZE"
-            
-            # إخراج المعلومات
-            echo "kernel_image=$KERNEL_IMAGE" >> $GITHUB_OUTPUT
-            echo "kernel_size=$KERNEL_SIZE" >> $GITHUB_OUTPUT
-            
-            # معلومات إضافية
-            echo ""
-            echo "📊 Kernel info:"
-            file "$KERNEL_IMAGE"
-          else
-            echo "❌ Kernel image not found!"
-            echo "Looking in: ${{ env.OUT_DIR }}/arch/arm64/boot/"
-            ls -la "${{ env.OUT_DIR }}/arch/arm64/boot/" 2>/dev/null || true
-            exit 1
-          fi
-          
-          # التحقق من DTBO
-          if [ -f "$DTBO_IMAGE" ]; then
-            DTBO_SIZE=$(du -h "$DTBO_IMAGE" | cut -f1)
-            echo "✅ DTBO Image: $DTBO_SIZE"
-            echo "dtbo_image=$DTBO_IMAGE" >> $GITHUB_OUTPUT
-            echo "dtbo_size=$DTBO_SIZE" >> $GITHUB_OUTPUT
-          else
-            echo "ℹ️  DTBO image not found (may be normal)"
-          fi
-      
-      # ========================================
-      # 11. إنشاء حزمة AnyKernel
-      # ========================================
-      - name: Create AnyKernel package
-        id: create-package
-        run: |
-          echo "📦 Creating AnyKernel package..."
-          
-          # إنشاء اسم للملف
-          TIMESTAMP=$(date +"%Y%m%d-%H%M")
-          ZIP_NAME="${{ env.KERNEL_NAME }}-$TIMESTAMP.zip"
-          
-          # Clone AnyKernel3
-          ANY_KERNEL_DIR="/tmp/anykernel3"
-          rm -rf "$ANY_KERNEL_DIR"
-          
-          echo "⬇️ Cloning AnyKernel3..."
-          git clone --depth=1 \
-            https://github.com/Joker-V2/AnyKernel3.git \
-            -b sixteen \
-            "$ANY_KERNEL_DIR"
-          
-          # نسخ ملفات النواة
-          echo "📂 Copying kernel files..."
-          cp "${{ steps.verify-outputs.outputs.kernel_image }}" "$ANY_KERNEL_DIR/Image.gz"
-          
-          if [ -n "${{ steps.verify-outputs.outputs.dtbo_image }}" ]; then
-            cp "${{ steps.verify-outputs.outputs.dtbo_image }}" "$ANY_KERNEL_DIR/dtbo.img"
-          fi
-          
-          # تحديث ملف anykernel.sh
-          echo "✏️ Updating anykernel.sh..."
-          sed -i "s/kernel.string=.*/kernel.string=${{ env.KERNEL_NAME }}-$TIMESTAMP/g" \
-            "$ANY_KERNEL_DIR/anykernel.sh"
-          
-          # إنشاء ZIP
-          echo "🗜️ Creating ZIP file..."
-          cd "$ANY_KERNEL_DIR"
-          zip -r9 "$ZIP_NAME" ./*
-          
-          # نقل إلى المكان النهائي
-          FINAL_ZIP="$HOME/$ZIP_NAME"
-          mv "$ZIP_NAME" "$FINAL_ZIP"
-          
-          # معلومات الملف
-          ZIP_SIZE=$(du -h "$FINAL_ZIP" | cut -f1)
-          ZIP_MD5=$(md5sum "$FINAL_ZIP" | cut -d' ' -f1)
-          
-          echo "✅ Package created: $ZIP_NAME ($ZIP_SIZE)"
-          echo "📝 MD5: $ZIP_MD5"
-          
-          # إخراج المعلومات
-          echo "zip_path=$FINAL_ZIP" >> $GITHUB_OUTPUT
-          echo "zip_name=$ZIP_NAME" >> $GITHUB_OUTPUT
-          echo "zip_size=$ZIP_SIZE" >> $GITHUB_OUTPUT
-          echo "zip_md5=$ZIP_MD5" >> $GITHUB_OUTPUT
-      
-      # ========================================
-      # 12. رفع المخرجات كـ Artifacts
-      # ========================================
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-build-${{ github.run_number }}
-          path: |
-            ${{ steps.verify-outputs.outputs.kernel_image }}
-            ${{ steps.create-package.outputs.zip_path }}
-            ${{ env.KERNEL_DIR }}/build_output.log
-          retention-days: 7
-      
-      # ========================================
-      # 13. إنشاء Release على GitHub
-      # ========================================
-      - name: Create GitHub Release
-        if: success() && github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: build-${{ github.run_number }}
-          name: "${{ env.KERNEL_NAME }} Build #${{ github.run_number }}"
-          body: |
-            ## 🚀 Kernel Build Successful!
-            
-            ### 📊 Build Information
-            - **Kernel**: ${{ env.KERNEL_NAME }}
-            - **KernelSU**: ${{ inputs.kernelsu_version }}
-            - **Build Time**: ${{ steps.build-kernel.outputs.build_time }} seconds
-            - **Build Date**: $(date -u +"%Y-%m-%d %H:%M UTC")
-            
-            ### 📦 Files
-            - **Flashable ZIP**: ${{ steps.create-package.outputs.zip_name }} (${{ steps.create-package.outputs.zip_size }})
-            - **MD5**: `${{ steps.create-package.outputs.zip_md5 }}`
-            
-            ### 🛠️ Installation
-            1. Download the flashable ZIP
-            2. Boot to custom recovery (TWRP/OrangeFox)
-            3. Flash the ZIP file
-            4. Wipe cache/dalvik if needed
-            5. Reboot
-            
-            ### ⚠️ Notes
-            - Requires unlocked bootloader
-            - Backup your data before flashing
-            - For Redmi Note 7 Pro (violet) only
-            
-            ---
-            
-            *Automated build via GitHub Actions*
-          files: |
-            ${{ steps.create-package.outputs.zip_path }}
-            ${{ steps.create-package.outputs.zip_path }}.md5
-          draft: false
-          prerelease: false
-      
-      # ========================================
-      # 14. عرض ملخص البناء
-      # ========================================
-      - name: Generate build summary
-        if: always()
-        run: |
-          echo "Generating build summary..."
-          
-          if [ "${{ job.status }}" == "success" ]; then
-            cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-## 🎉 Build Successful!
-
-### ✅ Build Information
-| Item | Details |
-|------|---------|
-| **Status** | ✅ Success |
-| **Kernel** | `${{ env.KERNEL_NAME }}` |
-| **KernelSU** | `${{ inputs.kernelsu_version }}` |
-| **Build Time** | `${{ steps.build-kernel.outputs.build_time }}` seconds |
-| **Kernel Size** | `${{ steps.verify-outputs.outputs.kernel_size }}` |
-| **ZIP Size** | `${{ steps.create-package.outputs.zip_size }}` |
-
-### 📦 Output Files
-1. **Kernel Image**: `Image.gz` (${{ steps.verify-outputs.outputs.kernel_size }})
-2. **Flashable ZIP**: `${{ steps.create-package.outputs.zip_name }}` (${{ steps.create-package.outputs.zip_size }})
-3. **MD5 Checksum**: `${{ steps.create-package.outputs.zip_md5 }}`
-
-### 📥 Download
-- Check the **Artifacts** tab for all build files
-- Or download from **Releases** page
-
-### 🚀 Next Steps
-1. Download the flashable ZIP
-2. Flash via custom recovery
-3. Reboot and enjoy!
-
----
-*Built with ❤️ using GitHub Actions*
-EOF
-          else
-            cat >> $GITHUB_STEP_SUMMARY << 'EOF'
-## ❌ Build Failed
-
-### 🔍 Troubleshooting Steps
-
-1. **Check Toolchain Installation**
-   - Verify ZyC Clang downloaded correctly
-   - Ensure clang binary is in PATH
-
-2. **Review Build Logs**
-   - Check the `build_output.log` in artifacts
-   - Look for specific error messages
-
-3. **Common Solutions**
-   - Try with `clean_build: true`
-   - Use a different KernelSU version
-   - Check kernel source code for errors
-
-4. **Get Help**
-   - Review the workflow logs above
-   - Check if all dependencies are installed
-   - Verify kernel configuration
-
-### 📞 Need Assistance?
-- Review the failed step above
-- Check artifact logs for details
-- Ensure kernel source is compatible
-
----
-*Check the logs above for specific error messages*
-EOF
-          fi
-      
-      # ========================================
-      # 15. عرض الإحصائيات النهائية
-      # ========================================
-      - name: Show final statistics
-        if: always()
-        run: |
-          echo "📊 Final Statistics"
-          echo "=================="
-          echo "Job Status: ${{ job.status }}"
-          echo "Build Time: ${{ steps.build-kernel.outputs.build_time || 'N/A' }} seconds"
-          
-          if [ "${{ job.status }}" == "success" ]; then
-            echo "Kernel Image: ${{ steps.verify-outputs.outputs.kernel_size || 'N/A' }}"
-            echo "ZIP File: ${{ steps.create-package.outputs.zip_size || 'N/A' }}"
-            echo "MD5: ${{ steps.create-package.outputs.zip_md5 || 'N/A' }}"
-          fi
-          
-          echo ""
-          echo "🔧 ccache statistics:"
-          echo "---------------------"
-          ccache -s
-          
-          echo ""
-          echo "💾 Disk Usage:"
-          echo "--------------"
-          df -h . | head -2
+          echo "Check the logs above for errors"
+        fi
