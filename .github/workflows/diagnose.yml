@@ -1,0 +1,46 @@
+name: Diagnose Kernel Build Stop
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Where am I?
+      run: |
+        pwd
+        ls -lah
+
+    - name: Check kernel root
+      run: |
+        ls -lah Makefile || echo "NO MAKEFILE"
+        head -n 5 Makefile || true
+
+    - name: Check defconfig exists
+      run: |
+        ls arch/arm64/configs/vendor/violet-perf_defconfig || echo "DEFCONFIG NOT FOUND"
+
+    - name: Try make help
+      run: |
+        make help || echo "MAKE FAILED"
+
+    - name: Try make defconfig only
+      run: |
+        make vendor/violet-perf_defconfig || echo "DEFCONFIG FAILED"
+
+    - name: List scripts directory
+      run: |
+        ls scripts || echo "NO SCRIPTS DIR"
+
+    - name: Check scripts/config
+      run: |
+        ls scripts/config || echo "NO scripts/config"
+
+    - name: Explicit exit
+      run: |
+        echo "Reached end of workflow"
