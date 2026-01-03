@@ -1,4 +1,4 @@
-name: Build Kernel (violet | KSU Next + SUSFS | ZyCromerZ Clang)
+name: Build Kernel (violet | ZyCromerZ Clang)
 
 on:
   push:
@@ -11,67 +11,63 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            bc bison flex libssl-dev \
-            make gcc gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi \
-            binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabi \
-            ccache curl git zip unzip
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          bc bison build-essential curl flex git gnupg \
+          libssl-dev libelf-dev lld llvm \
+          python3 unzip zip
 
-      - name: Download ZyCromerZ Clang 22
-        run: |
-          rm -rf clang
-          mkdir clang
-          cd clang
-          curl -L https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz | tar -xz
-          echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+    - name: Download ZyCromerZ Clang 22
+      run: |
+        git clone --depth=1 https://github.com/ZyCromerZ/Clang.git clang
 
-      - name: Verify toolchain
-        run: |
-          clang --version
-          ld.lld --version
-          which aarch64-linux-gnu-gcc
-          which arm-linux-gnueabi-gcc
+    - name: Setup toolchain env
+      run: |
+        echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "AR=llvm-ar" >> $GITHUB_ENV
+        echo "NM=llvm-nm" >> $GITHUB_ENV
+        echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
+        echo "OBJDUMP=llvm-objdump" >> $GITHUB_ENV
+        echo "STRIP=llvm-strip" >> $GITHUB_ENV
 
-      # 🔴 نفس KernelSU الذي نجح مع Proton (لا تغيّره)
-      - name: Setup KernelSU Next
-        run: |
-          git submodule update --init --recursive
+    - name: Verify clang
+      run: clang --version
 
-      - name: Load defconfig
-        run: |
-          make O=out ARCH=arm64 vendor/violet-perf_defconfig
+    - name: Setup KernelSU Next (official)
+      run: |
+        git clone https://github.com/KernelSU-Next/KernelSU-Next.git ksu
+        bash ksu/kernel/setup.sh
 
-      - name: Enable KernelSU + SUSFS
-        run: |
-          scripts/config --file out/.config \
-            -e CONFIG_KSU \
-            -e CONFIG_KSU_SUSFS
+    - name: Load defconfig
+      run: |
+        make O=out \
+          ARCH=arm64 \
+          vendor/violet-perf_defconfig
 
-          make O=out ARCH=arm64 olddefconfig
+    - name: Enable KernelSU + SUSFS
+      run: |
+        scripts/config --file out/.config \
+          -e CONFIG_KSU \
+          -e CONFIG_KSU_SUSFS
+        make O=out ARCH=arm64 olddefconfig
 
-      - name: Build kernel (LLVM)
-        run: |
-          make -j$(nproc) \
-            O=out \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CC=clang \
-            LD=ld.lld \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+    - name: Build kernel (LLVM)
+      run: |
+        make -j4 \
+          O=out \
+          ARCH=arm64 \
+          LLVM=1 \
+          LLVM_IAS=0
 
-      - name: Upload Image
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Image-ZyC
-          path: out/arch/arm64/boot/Image*
+    - name: Upload Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: Image
+        path: out/arch/arm64/boot/Image
