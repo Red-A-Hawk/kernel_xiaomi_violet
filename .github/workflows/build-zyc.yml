@@ -1,4 +1,4 @@
-name: Build Kernel (violet | KSU Next + SUSFS | ZyC Clang 22 - FIXED)
+name: Build Kernel (violet | KernelSU Next + SUSFS | Zyc Clang)
 
 on:
   push:
@@ -8,96 +8,65 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # ⚠️ مهم: غير من latest إلى 22.04
-
-    env:
-      JOBS: 4  # ⭐ إضافة هذا
+    runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+    - name: Checkout source
+      uses: actions/checkout@v4
 
-      - name: Setup 8GB swap
-        run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git bc bison flex libssl-dev \
+          make ccache curl zip unzip \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi \
+          binutils-aarch64-linux-gnu \
+          binutils-arm-linux-gnueabi
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            bc bison flex libssl-dev \
-            make gcc gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi \
-            binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabi \
-            ccache curl git zip unzip
+    - name: Download ZyCromerZ Clang 22
+      run: |
+        mkdir clang
+        curl -L \
+        https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz \
+        | tar -xz -C clang
 
-      - name: Download ZyCromerZ Clang 22
-        run: |
-          rm -rf clang
-          mkdir clang
-          cd clang
-          curl -L https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz | tar -xz
-          echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+    - name: Setup toolchain env
+      run: |
+        echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
 
-      - name: Verify toolchain
-        run: |
-          clang --version
-          ld.lld --version
-          which aarch64-linux-gnu-gcc
-          which arm-linux-gnueabi-gcc
+    - name: Setup KernelSU Next
+      run: |
+        git clone https://github.com/KernelSU-Next/KernelSU-Next.git ksu
 
-      - name: Setup KernelSU Next
-        run: |
-          git submodule update --init --recursive
+    - name: Load defconfig
+      run: |
+        make O=out vendor/violet-perf_defconfig
 
-      - name: Load defconfig
-        run: |
-          make O=out ARCH=arm64 vendor/violet-perf_defconfig
+    - name: Enable KernelSU + SUSFS
+      run: |
+        sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/' out/.config
+        sed -i 's/# CONFIG_SUSFS is not set/CONFIG_SUSFS=y/' out/.config
+        sed -i 's/# CONFIG_SUSFS_SUS_PATH is not set/CONFIG_SUSFS_SUS_PATH=y/' out/.config
+        sed -i 's/# CONFIG_SUSFS_SUS_MOUNT is not set/CONFIG_SUSFS_SUS_MOUNT=y/' out/.config
+        sed -i 's/# CONFIG_SUSFS_SUS_KSTAT is not set/CONFIG_SUSFS_SUS_KSTAT=y/' out/.config
+        sed -i 's/# CONFIG_SUSFS_SUS_MAPS is not set/CONFIG_SUSFS_SUS_MAPS=y/' out/.config
+        make O=out olddefconfig
 
-      - name: Enable KernelSU + SUSFS
-        run: |
-          scripts/config --file out/.config \
-            -e CONFIG_KSU \
-            -e CONFIG_KSU_SUSFS
-          make O=out ARCH=arm64 olddefconfig
+    - name: Build kernel
+      run: |
+        make O=out -j$(nproc)
 
-      - name: Build kernel (LLVM) - FIXED VERSION
-        run: |
-          # ⭐ استخدام JOBS=4 بدلاً من nproc
-          # ⭐ إضافة ccache للذاكرة المؤقتة
-          # ⭐ استخدام tee لحفظ الإخراج
-          
-          echo "🚀 Building with ZyC Clang 22 using ${{ env.JOBS }} jobs..."
-          
-          make -j${{ env.JOBS }} \
-            O=out \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CC="ccache clang" \
-            LD=ld.lld \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            2>&1 | tee build.log
-          
-          # التحقق من نجاح البناء
-          if [ -f "out/arch/arm64/boot/Image.gz" ] || [ -f "out/arch/arm64/boot/Image" ]; then
-            echo "✅ Build SUCCESSFUL - Kernel image found!"
-            ls -la out/arch/arm64/boot/
-          else
-            echo "❌ Build FAILED - Checking logs..."
-            grep -i "error\|warning" build.log | tail -20
-            exit 1
-          fi
-
-      - name: Upload Image
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Image-ZyC-22-Fixed
-          path: out/arch/arm64/boot/Image*
+    - name: Upload Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: Image
+        path: out/arch/arm64/boot/Image
