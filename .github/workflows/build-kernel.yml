@@ -1,6 +1,15 @@
 name: Build Kernel with KernelSU Next
 
 on:
+  push:
+    branches: [ "sixteen", "main" ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'README'
+  pull_request:
+    branches: [ "sixteen" ]
   workflow_dispatch:
     inputs:
       kernelsu_version:
@@ -66,86 +75,43 @@ jobs:
           restore-keys: |
             ccache-${{ runner.os }}-
       
-      # ========================================
-      # 🔧 هذا هو الجزء الذي يحتاج إصلاح فقط!
-      # ========================================
-      - name: Install ZyC Clang (FIXED)
-        id: install-clang
+      # ============================================
+      # 🔧 ONLY ADD THIS STEP - ZyC Clang FIX
+      # ============================================
+      - name: Install ZyC Clang (Fix)
         run: |
-          echo "::group::Installing ZyC Clang"
+          echo "::group::Installing ZyC Clang Fix"
           
-          # إنشاء مجلد للتولشين
-          CLANG_DIR="$HOME/clang"
-          mkdir -p "$CLANG_DIR"
+          # Download the correct toolchain
+          wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz
           
-          # الرابط الصحيح والمؤكد
-          CLANG_URL="https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz"
+          # Extract
+          tar -xzf Clang-22.0.0git-20250928.tar.gz
           
-          echo "Downloading ZyC Clang from:"
-          echo "$CLANG_URL"
+          # The extracted folder might have a different name
+          # Find the clang binary
+          CLANG_BIN=$(find . -name "clang" -type f | head -1)
           
-          # تحميل
-          cd /tmp
-          wget -q "$CLANG_URL" -O clang.tar.gz
-          
-          # استخراج
-          echo "Extracting..."
-          tar -xzf clang.tar.gz
-          
-          # 🔍 البحث عن clang في الملفات المستخرجة
-          echo "Looking for clang binary..."
-          
-          # ابحث في المجلد المستخرج
-          EXTRACTED_DIR=$(ls -d /tmp/Clang* 2>/dev/null | head -1)
-          
-          if [ -n "$EXTRACTED_DIR" ] && [ -d "$EXTRACTED_DIR" ]; then
-            echo "Found extracted directory: $EXTRACTED_DIR"
+          if [ -n "$CLANG_BIN" ]; then
+            CLANG_DIR=$(dirname "$CLANG_BIN")
+            echo "Found clang in: $CLANG_DIR"
             
-            # ابحث عن ملف clang
-            CLANG_BIN=$(find "$EXTRACTED_DIR" -name "clang" -type f | head -1)
+            # Add to PATH
+            echo "$CLANG_DIR" >> $GITHUB_PATH
             
-            if [ -n "$CLANG_BIN" ]; then
-              echo "Found clang at: $CLANG_BIN"
-              
-              # نسخ كل المحتويات
-              cp -r "$EXTRACTED_DIR"/* "$CLANG_DIR"/
-              
-              # إنشاء bin إذا لم يكن موجوداً
-              mkdir -p "$CLANG_DIR/bin"
-              
-              # نسخ clang إلى bin/
-              if [ ! -f "$CLANG_DIR/bin/clang" ]; then
-                cp "$CLANG_BIN" "$CLANG_DIR/bin/"
-              fi
-              
-              # إضافة إلى PATH
-              echo "$CLANG_DIR/bin" >> $GITHUB_PATH
-              
-              echo "✅ Clang installed successfully!"
-              echo "Path: $CLANG_DIR/bin"
-              
-              # اختبار
-              echo "Clang version:"
-              "$CLANG_DIR/bin/clang" --version | head -3
-              
-            else
-              echo "❌ clang binary not found in extracted files!"
-              exit 1
-            fi
+            # Test
+            echo "Clang version:"
+            "$CLANG_BIN" --version | head -3
           else
-            echo "❌ Extraction failed or directory not found!"
+            echo "ERROR: clang not found in extracted files!"
             exit 1
           fi
           
-          # تنظيف
-          rm -f /tmp/clang.tar.gz
-          rm -rf /tmp/Clang*
-          
           echo "::endgroup::"
+      # ============================================
+      # END OF FIX - EVERYTHING ELSE STAYS THE SAME
+      # ============================================
       
-      # ========================================
-      # باقي الخطوات تبقى كما هي!
-      # ========================================
       - name: Get kernel info
         id: info
         run: |
@@ -193,51 +159,24 @@ jobs:
         run: |
           echo "::group::Building kernel"
           
-          # تحقق من وجود build.py
-          if [ -f "build.py" ]; then
-            echo "Using build.py script"
-            chmod +x build.py
-            
-            # إعداد arguments
-            BUILD_ARGS="--kernelsu ${{ env.KERNELSU_VERSION }}"
-            
-            if [ "${{ env.CLEAN_BUILD }}" == "true" ]; then
-              BUILD_ARGS="$BUILD_ARGS --clean"
-            fi
-            
-            echo "Build command: python3 build.py $BUILD_ARGS"
-            python3 build.py $BUILD_ARGS
-            
-          else
-            echo "build.py not found, building directly..."
-            
-            # تنظيف إذا مطلوب
-            if [ "${{ env.CLEAN_BUILD }}" == "true" ]; then
-              make clean
-              make mrproper
-              rm -rf out
-            fi
-            
-            # إنشاء مجلد out
-            mkdir -p out
-            
-            # توليد config
-            make O=out ARCH=arm64 vendor/violet-perf_defconfig
-            
-            # بناء النواة
-            make -j$(nproc) \
-              O=out \
-              ARCH=arm64 \
-              CC="ccache clang" \
-              CLANG_TRIPLE="aarch64-linux-gnu-" \
-              CROSS_COMPILE="aarch64-linux-gnu-" \
-              CROSS_COMPILE_ARM32="arm-linux-gnueabi-" \
-              LLVM=1 \
-              LLVM_IAS=1
+          # Make script executable
+          chmod +x build.py
+          
+          # Prepare build arguments
+          BUILD_ARGS="--kernelsu ${{ env.KERNELSU_VERSION }}"
+          
+          if [ "${{ env.CLEAN_BUILD }}" == "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS --clean"
           fi
           
+          echo "Build command: python3 build.py $BUILD_ARGS"
+          echo "Starting build at $(date)"
+          
+          # Run build
+          python3 build.py $BUILD_ARGS
+          
           BUILD_EXIT=$?
-          echo "Build finished with exit code: $BUILD_EXIT"
+          echo "Build finished at $(date) with exit code: $BUILD_EXIT"
           
           echo "::endgroup::"
           
@@ -256,8 +195,14 @@ jobs:
             echo "::error::Kernel image not found!"
             exit 1
           fi
+          
+          # Verify DTBO
+          if [ -f out/arch/arm64/boot/dtbo.img ]; then
+            DTBO_SIZE=$(du -h out/arch/arm64/boot/dtbo.img | cut -f1)
+            echo "dtbo_size=$DTBO_SIZE" >> $GITHUB_OUTPUT
+            echo "✓ DTBO: dtbo.img ($DTBO_SIZE)"
+          fi
       
-      # باقي الخطوات تبقى كما هي...
       - name: Find flashable zip
         id: zip
         run: |
@@ -300,6 +245,16 @@ jobs:
           name: kernel-image-${{ steps.info.outputs.date }}
           path: out/arch/arm64/boot/Image.gz
           retention-days: 30
+          compression-level: 9
+      
+      - name: Upload DTBO
+        if: hashFiles('out/arch/arm64/boot/dtbo.img') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: dtbo-${{ steps.info.outputs.date }}
+          path: out/arch/arm64/boot/dtbo.img
+          retention-days: 30
+          compression-level: 9
       
       - name: Upload flashable zip
         if: steps.zip.outputs.found == 'true'
@@ -308,47 +263,185 @@ jobs:
           name: flashable-zip-${{ steps.info.outputs.date }}
           path: ${{ steps.zip.outputs.path }}
           retention-days: 30
+          compression-level: 0
+      
+      - name: Create Release
+        if: (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) && steps.zip.outputs.found == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: Build-${{ steps.info.outputs.date }}
+          name: Violet Kernel ${{ steps.info.outputs.ksu_suffix }} - ${{ steps.info.outputs.date }}
+          body: |
+            # 🎉 Violet Kernel Build
+            
+            ## 📊 Build Information
+            
+            | Parameter | Value |
+            |-----------|-------|
+            | **Kernel Version** | `${{ steps.info.outputs.version }}` |
+            | **Build Date** | `${{ steps.info.outputs.date }}` |
+            | **KernelSU Next** | `${{ env.KERNELSU_VERSION }}` |
+            | **Compiler** | `ZyC Clang 22.0.0` |
+            | **Clean Build** | `${{ env.CLEAN_BUILD }}` |
+            | **Commit** | `${{ steps.info.outputs.commit_hash }}` |
+            
+            ## 📦 Files
+            
+            | File | Size | MD5 |
+            |------|------|-----|
+            | **${{ steps.zip.outputs.name }}** | `${{ steps.zip.outputs.size }}` | `${{ steps.zip.outputs.md5 }}` |
+            | **Image.gz** | `${{ steps.build.outputs.kernel_size }}` | - |
+            | **dtbo.img** | `${{ steps.build.outputs.dtbo_size }}` | - |
+            
+            ## 📱 Installation
+            
+            ### Requirements
+            - ✅ **Unlocked Bootloader**
+            - ✅ **Custom Recovery** (TWRP recommended)
+            - ✅ **Backup** of current boot.img
+            
+            ### Steps
+            1. Download `${{ steps.zip.outputs.name }}`
+            2. Boot to TWRP Recovery
+            3. Flash the zip file
+            4. Wipe Cache/Dalvik
+            5. Reboot
+            6. **(If KernelSU)** Install [KernelSU Next Manager](https://github.com/KernelSU-Next/KernelSU-Next/releases)
+            
+            ## ⚙️ Features
+            
+            ${{ env.KERNELSU_VERSION != 'none' && '### ✅ KernelSU Next Enabled
+            - Root access with KernelSU Next
+            - Module support
+            - Advanced security features
+            - Better app compatibility
+            - Version: ' || '### ❌ KernelSU Not Included
+            - This is a vanilla kernel build
+            - No root functionality
+            - Stock kernel features only
+            ' }}${{ env.KERNELSU_VERSION }}
+            
+            ## 📋 Compatibility
+            
+            - **Device:** Redmi Note 7 Pro (Violet)
+            - **Android:** 15.0 - 16.0
+            - **Variant:** Retrofit Dynamic
+            
+            ## ⚠️ Important Notes
+            
+            - Always backup before flashing
+            - Warranty may be void after unlocking bootloader
+            - Report issues in [Issues](../../issues) section
+            - Join XDA discussion for support
+            
+            ## 🔗 Links
+            
+            - [KernelSU Next Docs](https://kernelsu-next.github.io/webpage/)
+            - [KernelSU Next Releases](https://github.com/KernelSU-Next/KernelSU-Next/releases)
+            - [Source Code](../../tree/${{ steps.info.outputs.commit_hash }})
+            
+            ## 📝 Changelog
+            
+            ```
+            ${{ steps.info.outputs.commit_msg }}
+            ```
+            
+            ---
+            
+            **Built with ❤️ by Red-A-Hawk**
+            
+            *Powered by GitHub Actions • Based on xcalibur kernel*
+          files: |
+            ${{ steps.zip.outputs.path }}
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/dtbo.img
+          draft: false
+          prerelease: ${{ env.KERNELSU_VERSION == 'dev' }}
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Generate build summary
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
-            cat > $GITHUB_STEP_SUMMARY << 'EOF'
-## ✅ Build Successful!
-
-### Build Information
-- **Kernel Version**: ${{ steps.info.outputs.version }}
-- **Build Date**: ${{ steps.info.outputs.date }}
-- **KernelSU**: ${{ env.KERNELSU_VERSION }}
-- **Commit**: ${{ steps.info.outputs.commit_hash }}
-
-### Output Files
-- Kernel Image: ${{ steps.build.outputs.kernel_size }}
-- Flashable ZIP: ${{ steps.zip.outputs.size }}
-
-### Installation
+            cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+## ✅ Build Successful! 🎉
+          
+### 🔧 Configuration
+| Parameter | Value |
+|-----------|-------|
+| Kernel Version | `${{ steps.info.outputs.version }}` |
+| Build Date | `${{ steps.info.outputs.date }}` |
+| KernelSU Next | `${{ env.KERNELSU_VERSION }}` |
+| Clean Build | `${{ env.CLEAN_BUILD }}` |
+| Commit | `${{ steps.info.outputs.commit_hash }}` |
+          
+### 📦 Output Files
+| File | Size |
+|------|------|
+| Flashable ZIP | `${{ steps.zip.outputs.size }}` |
+| Kernel Image | `${{ steps.build.outputs.kernel_size }}` |
+| DTBO | `${{ steps.build.outputs.dtbo_size }}` |
+          
+### 📥 Download
+- Check **Artifacts** section above to download
+- Or check **Releases** page for permanent links
+          
+### 🚀 Installation
 1. Download the flashable ZIP
 2. Boot to TWRP Recovery
 3. Flash the ZIP file
 4. Wipe Cache/Dalvik
-5. Reboot
+5. Reboot and enjoy!
+          
+### 📊 Build Details
+- **Workflow:** `${{ github.workflow }}`
+- **Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+- **Actor:** @${{ github.actor }}
+- **Event:** `${{ github.event_name }}`
 EOF
           else
-            cat > $GITHUB_STEP_SUMMARY << 'EOF'
+            cat >> $GITHUB_STEP_SUMMARY << 'EOF'
 ## ❌ Build Failed
-
-### Debug Information
+          
+### 📋 Debug Information
 Please check the logs above for detailed error messages.
-
-### Common Issues
-1. Toolchain errors
-2. KernelSU setup failed
-3. Compilation errors
-4. Out of memory
-
-### Next Steps
-- Review error.log in artifacts
-- Try running with clean_build: true
+          
+### 🔍 Common Issues
+1. **Toolchain errors** - Verify ZyC Clang download
+2. **KernelSU setup failed** - Check network connectivity  
+3. **Compilation errors** - Review kernel source code
+4. **Out of memory** - Try with clean build enabled
+          
+### 💡 Next Steps
+- Review error.log in artifacts (if available)
+- Try running with `clean_build: true`
 - Check if defconfig is correct
+- Verify all dependencies are installed
+          
+### 📞 Get Help
+- Open an [Issue](../../issues/new)
+- Check [closed issues](../../issues?q=is%3Aissue+is%3Aclosed)
+- Join XDA discussion thread
 EOF
           fi
+      
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ steps.info.outputs.date }}
+          path: |
+            error.log
+            out/.config
+            /tmp/*.sh
+          retention-days: 7
+          if-no-files-found: warn
+      
+      - name: Show ccache statistics
+        if: always()
+        run: |
+          echo "::group::ccache statistics"
+          ccache -s
+          echo "::endgroup::"
