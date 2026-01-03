@@ -1,4 +1,4 @@
-name: Build Kernel (KernelSU Next + SUSFS)
+name: Hybrid Build Kernel (KSU Next 1.1.1 + SUSFS)
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
       uses: actions/checkout@v4
 
     # =========================
-    # Install full Ubuntu toolchain
+    # Full Ubuntu toolchain (based on working script)
     # =========================
     - name: Install dependencies
       run: |
@@ -36,9 +36,9 @@ jobs:
           binutils-arm-linux-gnueabi
 
     # =========================
-    # Verify binutils (NO SILENT FAIL)
+    # Toolchain sanity check (NO SILENT FAIL)
     # =========================
-    - name: Verify binutils
+    - name: Verify GCC & binutils
       run: |
         which aarch64-linux-gnu-gcc
         which aarch64-linux-gnu-ld
@@ -48,15 +48,14 @@ jobs:
         arm-linux-gnueabi-ld --version
 
     # =========================
-    # Clang 17 (Proton – stable for 4.14)
+    # Clang 17 (proven with 4.14)
     # =========================
-    - name: Download Proton Clang
+    - name: Download Proton Clang 17
       run: |
         git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
     - name: Setup toolchain environment
       run: |
-        export PATH=/usr/bin:$PATH
         echo "PATH=$GITHUB_WORKSPACE/clang/bin:/usr/bin:$PATH" >> $GITHUB_ENV
         echo "CC=clang" >> $GITHUB_ENV
         echo "LLVM=1" >> $GITHUB_ENV
@@ -65,11 +64,17 @@ jobs:
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
     # =========================
-    # KernelSU Next (SUSFS built-in)
+    # KernelSU Next 1.1.1 HOTFIX (FIXED VERSION)
     # =========================
-    - name: Setup KernelSU Next
+    - name: Setup KernelSU Next 1.1.1 hotfix
       run: |
-        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh | bash -
+        git clone https://github.com/KernelSU-Next/KernelSU-Next ksu-next
+        cd ksu-next
+        git checkout v1.1.1-hotfix
+        cd kernel
+        bash setup.sh
+        cd ../..
+        rm -rf ksu-next
 
     # =========================
     # Defconfig
@@ -79,7 +84,7 @@ jobs:
         make $DEFCONFIG
 
     # =========================
-    # Build scripts (CRITICAL for 4.14)
+    # Build scripts (critical for 4.14)
     # =========================
     - name: Build kernel scripts
       run: |
@@ -100,7 +105,7 @@ jobs:
         make olddefconfig
 
     # =========================
-    # Build kernel (REAL TEST)
+    # Build kernel (REAL BUILD)
     # =========================
     - name: Build kernel
       run: |
