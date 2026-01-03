@@ -24,7 +24,7 @@ jobs:
       uses: actions/checkout@v4
 
     # =========================
-    # Dependencies
+    # Dependencies (IMPORTANT)
     # =========================
     - name: Install dependencies
       run: |
@@ -32,7 +32,9 @@ jobs:
         sudo apt install -y \
           git bc bison flex libssl-dev \
           make curl zip unzip \
-          openjdk-11-jre python3
+          openjdk-11-jre python3 \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi
 
     # =========================
     # Clang ZyCromerZ 22
@@ -43,15 +45,17 @@ jobs:
         mkdir clang
         tar -xf Clang-22.0.0git-20250928.tar.gz -C clang --strip-components=1
 
-    - name: Setup Clang environment
+    - name: Setup toolchain environment
       run: |
         echo "PATH=$CLANG_PATH/bin:$PATH" >> $GITHUB_ENV
         echo "CC=clang" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
     # =========================
-    # KernelSU Next (with SUSFS)
+    # KernelSU Next (SUSFS built-in)
     # =========================
     - name: Setup KernelSU Next
       run: |
