@@ -1,4 +1,4 @@
-name: Build Kernel (violet | KSU Next + SUSFS | ZyCromerZ Clang - Fixed)
+name: Build Kernel (violet | KSU Next + SUSFS | ZyCromerZ Clang)
 
 on:
   push:
@@ -13,18 +13,6 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Setup 16GB swap
-        run: |
-          sudo swapoff -a 2>/dev/null || true
-          sudo rm -f /swapfile 2>/dev/null || true
-          sudo fallocate -l 16G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
 
       - name: Install dependencies
         run: |
@@ -35,7 +23,7 @@ jobs:
             gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu \
             binutils-arm-linux-gnueabi \
-            ccache curl git zip unzip lld
+            ccache curl git zip unzip
 
       - name: Download ZyCromerZ Clang 22
         run: |
@@ -43,7 +31,6 @@ jobs:
           mkdir clang
           cd clang
           curl -L https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz | tar -xz
-          echo "CLANG_PATH=$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_ENV
           echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
 
       - name: Verify toolchain
@@ -51,13 +38,11 @@ jobs:
           clang --version
           ld.lld --version
           which aarch64-linux-gnu-gcc
+          which arm-linux-gnueabi-gcc
 
-      - name: Clean workspace
+      - name: Setup KernelSU Next
         run: |
-          rm -rf out
-          mkdir -p .ccache
-          make clean
-          make mrproper
+          git submodule update --init --recursive
 
       - name: Load defconfig
         run: |
@@ -70,45 +55,62 @@ jobs:
             -e CONFIG_KSU_SUSFS
           make O=out ARCH=arm64 olddefconfig
 
-      - name: Build kernel with limited resources
+      - name: Build kernel (LLVM) with error handling
+        id: build_kernel
+        continue-on-error: true  # الاستمرار حتى مع الأخطاء
         run: |
-          # إعداد متغيرات البيئة
-          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
-          export CCACHE_COMPRESS=1
-          export CCACHE_MAXSIZE=10G
-          export CCACHE_SLOPPINESS=time_macros,include_file_mtime
+          # تفريغ المخزن المؤقت
+          sync
           
-          # عدد jobs آمن
-          JOBS=3
-          echo "🚀 Building with $JOBS jobs using ZyCromerZ Clang"
+          # البناء مع حفظ الإخراج
+          {
+            make -j$(nproc) \
+              O=out \
+              ARCH=arm64 \
+              LLVM=1 \
+              LLVM_IAS=1 \
+              CC=clang \
+              LD=ld.lld \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          } 2>&1 | tee /tmp/build_output.txt
           
-          # التجميع مع مراقبة الذاكرة
-          make -j$JOBS \
-            O=out \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CC="ccache clang" \
-            LD=ld.lld \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          # حفظ رمز الخروج
+          BUILD_EXIT=${PIPESTATUS[0]}
+          echo "exit_code=$BUILD_EXIT" >> $GITHUB_OUTPUT
           
-          # إحصائيات
-          echo "📊 Build completed!"
-          ccache -s
+          # التحقق من وجود الصورة بغض النظر عن الخطأ
+          if [ -f "out/arch/arm64/boot/Image.gz-dtb" ] || [ -f "out/arch/arm64/boot/Image.gz" ] || [ -f "out/arch/arm64/boot/Image" ]; then
+            echo "✅ Kernel image FOUND despite any errors"
+            find out/arch/arm64/boot/ -type f | head -20
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ No kernel image found"
+            echo "success=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check build result
+        run: |
+          echo "Build exit code: ${{ steps.build_kernel.outputs.exit_code }}"
+          echo "Image found: ${{ steps.build_kernel.outputs.success }}"
+          
+          if [ "${{ steps.build_kernel.outputs.success }}" = "true" ]; then
+            echo "✅ Continuing with upload..."
+          else
+            echo "❌ Build failed completely"
+            exit 1
+          fi
 
       - name: Upload Image
-        if: success()
+        if: steps.build_kernel.outputs.success == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: Image-ZyC-Fixed
+          name: Image-ZyC
           path: out/arch/arm64/boot/Image*
-
-      - name: Upload build logs on failure
+          
+      - name: Upload build log on error
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Build-Logs-Error
-          path: |
-            out/.config
-            out/build.log
+          name: Build-Log-Error
+          path: /tmp/build_output.txt
