@@ -1,0 +1,107 @@
+name: Build Kernel (KernelSU Next + SUSFS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      DEFCONFIG: vendor/violet-perf_defconfig
+
+    steps:
+    # =========================
+    # Checkout
+    # =========================
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+
+    # =========================
+    # Install full Ubuntu toolchain
+    # =========================
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git bc bison flex make \
+          libssl-dev libelf-dev libncurses-dev \
+          dwarves \
+          python3 curl zip unzip \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi \
+          binutils-aarch64-linux-gnu \
+          binutils-arm-linux-gnueabi
+
+    # =========================
+    # Verify binutils (NO SILENT FAIL)
+    # =========================
+    - name: Verify binutils
+      run: |
+        which aarch64-linux-gnu-gcc
+        which aarch64-linux-gnu-ld
+        which arm-linux-gnueabi-gcc
+        which arm-linux-gnueabi-ld
+        aarch64-linux-gnu-ld --version
+        arm-linux-gnueabi-ld --version
+
+    # =========================
+    # Clang 17 (Proton – stable for 4.14)
+    # =========================
+    - name: Download Proton Clang
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+
+    - name: Setup toolchain environment
+      run: |
+        export PATH=/usr/bin:$PATH
+        echo "PATH=$GITHUB_WORKSPACE/clang/bin:/usr/bin:$PATH" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+    # =========================
+    # KernelSU Next (SUSFS built-in)
+    # =========================
+    - name: Setup KernelSU Next
+      run: |
+        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh | bash -
+
+    # =========================
+    # Defconfig
+    # =========================
+    - name: Load defconfig
+      run: |
+        make $DEFCONFIG
+
+    # =========================
+    # Build scripts (CRITICAL for 4.14)
+    # =========================
+    - name: Build kernel scripts
+      run: |
+        make scripts
+
+    # =========================
+    # Enable KernelSU + SUSFS
+    # =========================
+    - name: Enable KernelSU + SUSFS configs
+      run: |
+        scripts/config --enable CONFIG_KSU
+        scripts/config --enable CONFIG_SUSFS
+        scripts/config --enable CONFIG_KSU_SUSFS
+        scripts/config --enable CONFIG_SUSFS_HIDE_KSU
+        scripts/config --enable CONFIG_SUSFS_SPOOF_UNAME
+        scripts/config --enable CONFIG_SUSFS_SPOOF_CMDLINE
+        scripts/config --enable CONFIG_SUSFS_SPOOF_RELEASE
+        make olddefconfig
+
+    # =========================
+    # Build kernel (REAL TEST)
+    # =========================
+    - name: Build kernel
+      run: |
+        make -j$(nproc)
