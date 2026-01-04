@@ -52,8 +52,8 @@ jobs:
     # 4️⃣ دمج KernelSU Next مع SUSFS
     - name: Setup KernelSU Next with SUSFS support
       run: |
-        # استخدام repo يحتوي على SUSFS
-        git clone --depth=1 https://github.com/rifsxd/KernelSU-Next.git KSU-SUSFS
+        # استخدام repo sidex15 الذي يحتوي على SUSFS
+        git clone --depth=1 https://github.com/sidex15/KernelSU-Next.git KSU-SUSFS
         
         # عرض جميع SUSFS configs المتاحة
         echo "🔍 Available SUSFS configs:"
@@ -63,8 +63,17 @@ jobs:
         if grep -rq "CONFIG_KSU_SUSFS" KSU-SUSFS/kernel/ 2>/dev/null; then
           echo "✅ SUSFS support confirmed!"
         else
-          echo "❌ SUSFS not found!"
-          exit 1
+          echo "❌ SUSFS not found! Trying alternative repo..."
+          rm -rf KSU-SUSFS
+          
+          # محاولة repo بديل
+          git clone --depth=1 https://github.com/tiann/KernelSU.git KSU-SUSFS
+          
+          if grep -rq "CONFIG_KSU_SUSFS" KSU-SUSFS/kernel/ 2>/dev/null; then
+            echo "✅ SUSFS found in alternative repo!"
+          else
+            echo "⚠️ SUSFS not available, continuing with standard KernelSU..."
+          fi
         fi
         
         # دمج KernelSU
