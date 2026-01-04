@@ -1,4 +1,4 @@
-name: Build Kernel Violet (Local Only)
+name: Build Kernel (sixteen)
 
 on:
   push:
@@ -8,75 +8,63 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
-    - name: Clone kernel source (manual)
-      run: |
-        git clone --depth=1 -b sixteen \
-        https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git kernel
-        cd kernel
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y \
-          bc bison flex libssl-dev \
-          make git curl zip unzip \
-          python3 openjdk-11-jre
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            git bc bison flex libssl-dev \
+            make gcc clang lld \
+            libc6-dev libncurses5-dev \
+            libelf-dev ccache zip unzip
 
-    - name: Setup Proton Clang
-      run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
-        echo "$PWD/clang/bin" >> $GITHUB_PATH
+      - name: Setup Proton Clang
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+          echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    - name: Setup KernelSU Next v1.1.1
-      run: |
-        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
-        cd KernelSU-Next
-        git checkout v1.1.1
-        cd ../kernel
-        bash ../KernelSU-Next/kernel/setup.sh
+      - name: Setup KernelSU Next v1.1.1
+        run: |
+          git clone https://github.com/KernelSU-Next/KernelSU-Next.git
+          cd KernelSU-Next
+          git checkout v1.1.1
+          cd ..
+          bash KernelSU-Next/next/kernel/setup.sh
 
-    - name: Build kernel
-      run: |
-        cd kernel
-        export ARCH=arm64
-        export SUBARCH=arm64
-        export CC=clang
-        export LD=ld.lld
-        export LLVM=1
-        export LLVM_IAS=1
-        export CROSS_COMPILE=aarch64-linux-gnu-
-        export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+      - name: Prepare build
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export LD=ld.lld
+          export LLVM=1
+          export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
-        make O=out vendor/violet-perf_defconfig
+          mkdir -p out
+          make O=out vendor/violet_defconfig
 
-        scripts/config --file out/.config \
-          -d CONFIG_COMPAT \
-          -d CONFIG_COMPAT_VDSO \
-          -e CONFIG_KSU \
-          -e CONFIG_KSU_MANUAL_HOOK
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export LD=ld.lld
+          export LLVM=1
+          export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
-        make O=out olddefconfig
-        make -j$(nproc) O=out
+          make -j$(nproc) O=out
 
-    - name: Pack AnyKernel3
-      run: |
-        git clone https://github.com/Joker-V2/AnyKernel3.git AK3
-        cp kernel/out/arch/arm64/boot/Image.gz AK3/
-        cp kernel/out/arch/arm64/boot/dtbo.img AK3/
-        cd AK3
-        zip -r9 kernel-violet.zip *
-
-    - name: Sign zip
-      run: |
-        cd AK3
-        curl -L -o zipsigner.jar \
-          https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-        java -jar zipsigner.jar kernel-violet.zip kernel-violet-signed.zip
-
-    - name: Done
-      run: |
-        echo "BUILD FINISHED ✅"
-        ls -lh AK3/kernel-violet-signed.zip
+      - name: Upload Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image
+          path: out/arch/arm64/boot/Image
