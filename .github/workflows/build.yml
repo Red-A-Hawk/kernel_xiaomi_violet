@@ -16,16 +16,7 @@ jobs:
         run: |
           git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git || exit 1
 
-      # تثبيت Proton Clang Toolchain أولاً
-      - name: Install Proton Clang Toolchain
-        run: |
-          sudo apt-get install -y clang-11 lld-11
-
-      # تثبيت Python 3.8 و pip
-      - name: Set up Python 3.8
-        run: sudo apt-get install python3.8 python3-pip
-
-      # تثبيت الاعتمادات المطلوبة
+      # تثبيت الاعتمادات المطلوبة بعد التأكد من المستودع
       - name: Install required dependencies
         run: |
           sudo apt-get update
@@ -33,7 +24,25 @@ jobs:
           git libssl-dev libncurses5-dev lzop zip wget python3 \
           xz-utils libxml2-utils
 
-      # تثبيت KernelSU Next v1.1.1 بعد تثبيت Python
+      # تثبيت Python 3.8 و pip
+      - name: Set up Python 3.8
+        run: sudo apt-get install python3.8 python3-pip
+
+      # تثبيت Proton Clang Toolchain
+      - name: Install Proton Clang Toolchain
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
+          echo "PATH=$GITHUB_WORKSPACE/proton-clang/bin:$PATH" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "LD=ld.lld" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "LLVM=1" >> $GITHUB_ENV
+          echo "LLVM_IAS=1" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+      # تثبيت KernelSU Next v1.1.1 بعد تثبيت جميع الأدوات
       - name: Checkout KernelSU Next v1.1.1
         run: |
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
@@ -44,19 +53,18 @@ jobs:
           cp /path/to/vendor/violet-perf_defconfig .config
           make olddefconfig
 
-      # بناء النواة
-      - name: Build Kernel
-        run: make -j$(nproc) O=out
+      # بناء النواة باستخدام Proton Clang
+      - name: Build Kernel with Proton Clang
+        run: |
+          make -j$(nproc) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld
 
       # استنساخ AnyKernel3 (sixteen)
       - name: Clone AnyKernel3 (sixteen)
         run: git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/AnyKernel3.git
 
-      # نسخ ملف Image.gz و dtbo.img إلى AnyKernel3
-      - name: Copy Kernel Image and dtbo.img to AnyKernel3
-        run: |
-          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+      # نسخ صورة النواة
+      - name: Copy Kernel Image
+        run: cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3
 
       # إنشاء ملف Flashable ZIP
       - name: Create Flashable ZIP
