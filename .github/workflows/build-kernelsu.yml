@@ -1,9 +1,8 @@
-name: Build KernelSU Next v1.1.1 (violet | sixteen)
+name: Build KernelSU Next (violet | sixteen)
 
 on:
   push:
-    branches:
-      - sixteen
+    branches: [ sixteen ]
   workflow_dispatch:
 
 jobs:
@@ -26,45 +25,22 @@ jobs:
           git bc bison flex libssl-dev \
           make zip unzip curl wget \
           libelf-dev libncurses5-dev \
+          python3 python3-pip \
           gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi \
-          python3 python3-pip
+          gcc-arm-linux-gnueabi
 
-    # 3️⃣ Cache لـ ZyCromerZ Clang
-    - name: Cache ZyCromerZ Clang
-      id: cache-clang
-      uses: actions/cache@v4
-      with:
-        path: clang
-        key: zyc-clang-15.0.7-20251111
-
-    - name: Setup ZyCromerZ Clang 15.0.7
-      if: steps.cache-clang.outputs.cache-hit != 'true'
+    # 3️⃣ ZyCromerZ Clang
+    - name: Setup ZyCromerZ Clang
       run: |
         mkdir clang
         wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
-        rm -f Clang-15.0.7-20251111.tar.gz
+        echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    - name: Add Clang to PATH
-      run: echo "$PWD/clang/bin" >> $GITHUB_PATH
-
-    # 4️⃣ دمج KernelSU Next v1.1.1
-    - name: Setup KernelSU Next v1.1.1
+    # 4️⃣ دمج KernelSU Next (Manual Hook)
+    - name: Setup KernelSU Next
       run: |
-        echo "📦 Cloning KernelSU Next v1.1.1..."
-        git clone --depth=1 -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
-        
-        echo "🔧 Integrating KernelSU..."
-        bash KernelSU-Next/kernel/setup.sh
-        
-        # التحقق من نجاح الدمج
-        if [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ]; then
-          echo "✅ KernelSU Next v1.1.1 integrated successfully"
-        else
-          echo "❌ KernelSU integration failed"
-          exit 1
-        fi
+        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh | bash -
 
     # 5️⃣ متغيرات البناء
     - name: Export build environment
@@ -78,23 +54,21 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # 6️⃣ تحميل defconfig
+    # 6️⃣ تحميل defconfig الصحيح
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
 
-    # 7️⃣ تفعيل الـ 19 configs المحددة فقط
-    - name: Enable KernelSU + SUSFS configs
+    # 7️⃣ تفعيل KernelSU + SUSFS (Manual فقط)
+    - name: Apply KernelSU & SUSFS config
       run: |
-        echo "🔧 Applying your custom 19 configs..."
-        
-        # KernelSU الأساسي (3 configs)
         scripts/config --file out/.config \
           -e CONFIG_KSU \
+          -e CONFIG_KSU_MANUAL_HOOK \
           -e CONFIG_KSU_LSM_SECURITY_HOOKS \
-          -e CONFIG_KSU_MANUAL_HOOK
-        
-        # SUSFS (14 configs)
+          -d CONFIG_KPROBES \
+          -d CONFIG_KPROBE_EVENTS
+
         scripts/config --file out/.config \
           -e CONFIG_KSU_SUSFS \
           -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
@@ -106,176 +80,41 @@ jobs:
           -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
           -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
           -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
-          -e CONFIG_KSU_SUSFS_ENABLE_LOG \
-          -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
           -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT
-        
-        # Kprobes معطّل (1 config)
-        scripts/config --file out/.config \
-          -d CONFIG_KPROBES
-        
-        # إضافي (1 config)
-        scripts/config --file out/.config \
-          -e CONFIG_COMPAT_VDSO
-        
-        # تطبيق التغييرات
+          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+          -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+
         make O=out olddefconfig
-        
-        echo ""
-        echo "================================================"
-        echo "🔍 Configuration Verification:"
-        echo "================================================"
-        
-        # التحقق من KernelSU
-        if grep -q "CONFIG_KSU=y" out/.config; then
-          echo "✅ CONFIG_KSU enabled"
-        else
-          echo "❌ CONFIG_KSU NOT enabled"
-          exit 1
-        fi
-        
-        # التحقق من Manual Hook
-        if grep -q "CONFIG_KSU_MANUAL_HOOK=y" out/.config; then
-          echo "✅ CONFIG_KSU_MANUAL_HOOK enabled"
-        else
-          echo "⚠️ CONFIG_KSU_MANUAL_HOOK NOT enabled"
-        fi
-        
-        # عد configs المفعلة
-        SUSFS_COUNT=$(grep -c "CONFIG_KSU_SUSFS.*=y" out/.config || echo "0")
-        echo "📊 SUSFS configs enabled: $SUSFS_COUNT"
-        
-        if [ "$SUSFS_COUNT" -gt "0" ]; then
-          echo "📋 Enabled SUSFS features:"
-          grep "CONFIG_KSU_SUSFS.*=y" out/.config | sed 's/=y//' | sed 's/CONFIG_/  - /'
-        else
-          echo "⚠️ No SUSFS configs enabled"
-        fi
-        
-        echo "================================================"
 
     # 8️⃣ بناء النواة
     - name: Build kernel
       run: |
-        echo "🔨 Starting kernel build..."
-        make O=out -j$(nproc) 2>&1 | tee build.log
-        echo "✅ Build completed!"
+        make O=out -j$(nproc)
 
-    # 9️⃣ التحقق من نجاح البناء
-    - name: Check build output
+    # 9️⃣ التحقق من الصور
+    - name: Check outputs
       run: |
-        if [ ! -f out/arch/arm64/boot/Image.gz ]; then
-          echo "❌ Build failed! Image.gz not found"
-          exit 1
-        fi
-        echo "✅ Image.gz found ($(du -h out/arch/arm64/boot/Image.gz | cut -f1))"
-        
-        if [ ! -f out/arch/arm64/boot/dtbo.img ]; then
-          echo "❌ dtbo.img not found"
-          exit 1
-        fi
-        echo "✅ dtbo.img found ($(du -h out/arch/arm64/boot/dtbo.img | cut -f1))"
+        test -f out/arch/arm64/boot/Image.gz
+        test -f out/arch/arm64/boot/dtbo.img
 
-    # 🔟 تحضير AnyKernel3
-    - name: Package with AnyKernel3
+    # 🔟 AnyKernel3
+    - name: Package AnyKernel3
       run: |
         git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git
-        
         cp out/arch/arm64/boot/Image.gz AnyKernel3/
-        echo "✅ Image.gz copied"
-        
         cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-        echo "✅ dtbo.img copied"
-        
-        BUILD_DATE=$(date +"%Y%m%d-%H%M")
-        
         cd AnyKernel3
-        zip -r9 ../KernelSU-Next-v1.1.1-Violet-${BUILD_DATE}-unsigned.zip * -x .git README.md .gitignore
-        echo "✅ Unsigned ZIP created"
+        zip -r9 ../kernel-unsigned.zip *
 
-    # 1️⃣1️⃣ تحميل zipsigner
-    - name: Download zipsigner
+    # 1️⃣1️⃣ zipsigner
+    - name: Sign zip
       run: |
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar -O zipsigner-3.0-dexed.jar
-        echo "✅ zipsigner-3.0-dexed.jar downloaded"
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner-3.0-dexed.jar kernel-unsigned.zip kernel-signed.zip
 
-    # 1️⃣2️⃣ توقيع الـ ZIP
-    - name: Sign ZIP with zipsigner
-      run: |
-        BUILD_DATE=$(date +"%Y%m%d-%H%M")
-        java -jar zipsigner-3.0-dexed.jar \
-          KernelSU-Next-v1.1.1-Violet-${BUILD_DATE}-unsigned.zip \
-          KernelSU-Next-v1.1.1-Violet-${BUILD_DATE}.zip
-        echo "✅ ZIP signed successfully"
-        
-        rm -f KernelSU-Next-v1.1.1-Violet-${BUILD_DATE}-unsigned.zip
-        ls -lh KernelSU-Next-v1.1.1-Violet-${BUILD_DATE}.zip
-
-    # 1️⃣3️⃣ رفع Build Log في حالة الفشل
-    - name: Upload build log
-      if: failure()
+    # 1️⃣2️⃣ رفع الناتج
+    - name: Upload kernel
       uses: actions/upload-artifact@v4
       with:
-        name: build-log
-        path: build.log
-
-    # 1️⃣4️⃣ رفع ZIP النهائي
-    - name: Upload flashable ZIP
-      uses: actions/upload-artifact@v4
-      with:
-        name: KernelSU-Next-v1.1.1-Violet
-        path: KernelSU-Next-v1.1.1-Violet-*.zip
-
-    # 1️⃣5️⃣ رفع الملفات المنفصلة
-    - name: Upload kernel images
-      uses: actions/upload-artifact@v4
-      with:
-        name: Kernel-Images
-        path: |
-          out/arch/arm64/boot/Image.gz
-          out/arch/arm64/boot/dtbo.img
-
-    # 1️⃣6️⃣ إنشاء Release تلقائي
-    - name: Create Release
-      if: github.ref == 'refs/heads/sixteen'
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: KernelSU-Next-v1.1.1-${{ github.run_number }}
-        name: KernelSU Next v1.1.1 Build #${{ github.run_number }}
-        body: |
-          🔥 **KernelSU Next v1.1.1 for Xiaomi Violet**
-          
-          📱 **Device:** Redmi Note 7 Pro (violet)
-          🔧 **KernelSU:** Next v1.1.1
-          📅 **Build Date:** ${{ github.event.head_commit.timestamp }}
-          🔨 **Compiler:** ZyCromerZ Clang 15.0.7
-          
-          **Features:**
-          ✅ KernelSU Next v1.1.1
-          ✅ SUSFS (14 features)
-          ✅ Manual Hooks
-          ✅ Signed with zipsigner-3.0-dexed
-          
-          **SUSFS Features:**
-          • Magic Mount hiding
-          • Path & Mount spoofing
-          • Kernel stat hiding
-          • Uname spoofing
-          • Cmdline/Bootconfig spoofing
-          • Open redirect
-          • Logging enabled
-          • Symbol hiding
-          
-          **How to Flash:**
-          1. Boot to TWRP/OrangeFox
-          2. Flash the ZIP file
-          3. Reboot
-          4. Install KernelSU Manager
-          
-          ⚠️ **Backup your data first!**
-        files: KernelSU-Next-v1.1.1-Violet-*.zip
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: KernelSU-Next-violet
+        path: kernel-signed.zip
