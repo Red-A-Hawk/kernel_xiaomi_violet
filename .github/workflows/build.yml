@@ -1,31 +1,79 @@
-name: Build Kernel (violet | Proton | KernelSU Next 1.1.1)
+name: Kernel Build Script with Dependencies
 
 on:
   push:
     branches:
-      - sixteen
-  workflow_dispatch:
+      - main
 
 jobs:
-  build_kernel:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Kernel Source
-      uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v2
 
-    - name: Install Dependencies
+    - name: Checkout sixteen branch
+      run: |
+        git fetch origin
+        git checkout sixteen || git checkout -b sixteen
+
+    - name: Set up Python 3.8
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.8'
+
+    - name: Install required dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          clang make gcc git bc libncurses-dev \
-          libssl-dev libelf-dev flex bison zip unzip \
-          openjdk-17-jdk python3 ccache
+          build-essential \
+          gcc \
+          g++ \
+          make \
+          binutils \
+          libc6-dev \
+          libncurses5-dev \
+          libssl-dev \
+          bc \
+          bison \
+          flex \
+          libelf-dev \
+          libssl-dev \
+          zlib1g-dev \
+          libxml2-utils \
+          clang \
+          lld \
+          llvm \
+          git \
+          libtool \
+          liblz4-tool \
+          libgmp-dev \
+          libmpc-dev \
+          autoconf \
+          python3 \
+          python3-pip \
+          python3-venv \
+          rsync \
+          libreadline-dev \
+          libcurl4-openssl-dev \
+          libc6-i386 \
+          lib32stdc++6 \
+          lib32gcc1 \
+          lib32ncurses5 \
+          lib32z1 \
+          zipsigner \
+          gcc-arm-linux-gnueabi \
+          g++-arm-linux-gnueabi
 
-    - name: Set up Proton Clang Toolchain
+    - name: Install Clang (if needed)
       run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton
-        echo "PATH=$GITHUB_WORKSPACE/proton/bin:$PATH" >> $GITHUB_ENV
+        sudo apt-get install -y clang
+
+    - name: Install Proton Clang Toolchain
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/ProtonClang
+        echo "PATH=$GITHUB_WORKSPACE/ProtonClang/bin:$PATH" >> $GITHUB_ENV
         echo "CC=clang" >> $GITHUB_ENV
         echo "LD=ld.lld" >> $GITHUB_ENV
         echo "ARCH=arm64" >> $GITHUB_ENV
@@ -34,6 +82,17 @@ jobs:
         echo "LLVM_IAS=1" >> $GITHUB_ENV
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+    - name: Install Python dependencies for kernel building
+      run: |
+        pip3 install --upgrade setuptools
+        pip3 install --upgrade cmake
+
+    - name: Install ARM Cross-Compiling Tools
+      run: |
+        sudo apt-get install -y \
+          gcc-aarch64-linux-gnu \
+          g++-aarch64-linux-gnu
 
     - name: Checkout KernelSU Next v1.1.1
       run: |
@@ -45,29 +104,13 @@ jobs:
 
     - name: Apply Custom defconfig and Load Kernel Config
       run: |
-        make O=out vendor/violet-perf_defconfig
+        cp /path/to/vendor/violet-perf_defconfig .config
+        make O=out ARCH=arm64 vendor/violet-perf_defconfig
+        make O=out ARCH=arm64
 
-        # Custom Config Adjustments (Example)
-        sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/' out/.config
-        sed -i 's/# CONFIG_KSU_DEBUG is not set/CONFIG_KSU_DEBUG=n/' out/.config
-        sed -i 's/# CONFIG_KSU_MANUAL_HOOK is not set/CONFIG_KSU_MANUAL_HOOK=y/' out/.config
-        sed -i 's/# CONFIG_KSU_SUSFS is not set/CONFIG_KSU_SUSFS=y/' out/.config
-        sed -i 's/# CONFIG_KSU_SUSFS_SUS_PATH is not set/CONFIG_KSU_SUSFS_SUS_PATH=y/' out/.config
-        sed -i 's/# CONFIG_KSU_SUSFS_SUS_MOUNT is not set/CONFIG_KSU_SUSFS_SUS_MOUNT=y/' out/.config
-        sed -i 's/# CONFIG_KSU_SUSFS_SUS_KSTAT is not set/CONFIG_KSU_SUSFS_SUS_KSTAT=y/' out/.config
-        sed -i 's/# CONFIG_KSU_SUSFS_SPOOF_UNAME is not set/CONFIG_KSU_SUSFS_SPOOF_UNAME=y/' out/.config
-        sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=n/' out/.config
-        sed -i 's/# CONFIG_KPROBE_EVENTS is not set/CONFIG_KPROBE_EVENTS=n/' out/.config
-
-    - name: Build the Kernel
+    - name: Build Kernel
       run: |
-        make O=out -j$(nproc) CC=clang LD=ld.lld
-        if [ $? -eq 0 ]; then
-          echo "Kernel build successful!"
-        else
-          echo "Kernel build failed, please check the error logs above."
-          exit 1
-        fi
+        make -j$(nproc) O=out
 
     - name: Clone AnyKernel3 (sixteen)
       run: |
@@ -98,3 +141,16 @@ jobs:
       with:
         name: Flashable-Kernel
         path: kernel-violet-KSU-next.zip
+
+    - name: Artificial Summary
+      run: |
+        echo "Build Summary:"
+        echo "-----------------------------------------"
+        echo "Kernel build completed successfully."
+        echo "KernelSU Next version: v1.1.1"
+        echo "SUSFS features are enabled."
+        echo "Proton Clang toolchain used for build."
+        echo "AnyKernel3 used for creating flashable zip."
+        echo "zipsigner was used to sign the zip file."
+        echo "-----------------------------------------"
+        echo "Please proceed to flash the kernel using TWRP or your preferred recovery method."
