@@ -1,0 +1,21 @@
+Run details
+Workflow file for this run
+.github/workflows/test.yml at 5156768
+name: TEST sixteen branch
+
+on:
+  push:
+    branches:
+      - sixteen
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check branch
+        run: |
+          echo "Workflow is running on branch:"
+          echo "$GITHUB_REF"
+          echo "If you see this, Actions WORK ✅"
