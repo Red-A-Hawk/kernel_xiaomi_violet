@@ -1,9 +1,9 @@
-name: Kernel Build Script with Dependencies
+name: Build Kernel
 
 on:
   push:
     branches:
-      - sixteen  # التأكد من أن الفروع تعمل مع "sixteen"
+      - sixteen
   workflow_dispatch:
 
 jobs:
@@ -11,142 +11,96 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v2
+      # Check out the repository
+      - name: Checkout KernelSU Next v1.1.1
+        run: git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git
 
-    - name: Ensure 'sixteen' branch exists
-      run: |
-        git fetch origin
-        git checkout sixteen || git checkout -b sixteen  # التأكد من وجود الفرع sixteen
+      # Set up Python 3.8
+      - name: Set up Python 3.8
+        run: sudo apt-get update && sudo apt-get install -y python3.8 python3-pip python3-setuptools
 
-    - name: Set up Python 3.8
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.8'
+      # Install required dependencies
+      - name: Install required dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential curl flex \
+          git libssl-dev libncurses5-dev lzop zip wget python3 \
+          xz-utils libxml2-utils
+          echo "Required dependencies installed"
 
-    - name: Install required dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          bc \
-          bison \
-          build-essential \
-          curl \
-          flex \
-          git \
-          libssl-dev \
-          libncurses5-dev \
-          lzop \
-          zip \
-          wget \
-          python3 \
-          xz-utils \
-          libxml2-utils \
-          openjdk-11-jdk  # تثبيت Java
+      # Install Clang and Proton Clang Toolchain
+      - name: Install Clang and Proton Clang Toolchain
+        run: |
+          sudo apt-get install -y clang llvm lld
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
+          echo "PATH=$GITHUB_WORKSPACE/proton-clang/bin:$PATH" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "LD=ld.lld" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "LLVM=1" >> $GITHUB_ENV
+          echo "LLVM_IAS=1" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+          echo "Proton Clang toolchain installed"
 
-    - name: Install ARM Cross-Compiling Tools
-      run: |
-        sudo apt-get install -y \
-          gcc-arm-linux-gnueabi \
-          g++-arm-linux-gnueabi
+      # Install Python dependencies for kernel building
+      - name: Install Python dependencies for kernel building
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install setuptools
 
-    - name: Install Clang (if needed)
-      run: |
-        sudo apt-get install -y clang llvm lld
+      # Install ARM Cross-Compiling Tools
+      - name: Install ARM Cross-Compiling Tools
+        run: |
+          sudo apt-get install -y gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf
+          echo "ARM Cross-Compiling Tools installed"
 
-    - name: Install Proton Clang Toolchain
-      run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/ProtonClang
-        echo "PATH=$GITHUB_WORKSPACE/ProtonClang/bin:$PATH" >> $GITHUB_ENV
-        echo "CC=clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "LLVM=1" >> $GITHUB_ENV
-        echo "LLVM_IAS=1" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+      # Apply Custom defconfig and Load Kernel Config
+      - name: Load Custom defconfig
+        run: |
+          echo "🔧 Loading Custom Defconfig"
+          cp vendor/violet-perf_defconfig .config
+          echo "✅ Defconfig Loaded"
 
-    - name: Install Python dependencies for kernel building
-      run: |
-        pip3 install --upgrade setuptools
-        pip3 install --upgrade cmake
+      # Build the kernel
+      - name: Build Kernel
+        run: |
+          echo "🚀 Building Kernel with Proton Clang"
+          make -j$(nproc) O=out ARCH=arm64
 
-    - name: Install Python dependencies for building kernel
-      run: |
-        pip3 install --upgrade setuptools
-        pip3 install --upgrade cmake
+      # Clone AnyKernel3 (sixteen)
+      - name: Clone AnyKernel3 (sixteen)
+        run: git clone --single-branch --branch sixteen https://github.com/Joker-V2/AnyKernel3.git
 
-    - name: Checkout KernelSU Next v1.1.1
-      run: |
-        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
-        cd KernelSU-Next
-        git checkout v1.1.1
-        cd ..
-        bash KernelSU-Next/kernel/setup.sh
+      # Copy Kernel Image
+      - name: Copy Kernel Image
+        run: |
+          echo "🔄 Copying Kernel Image"
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
 
-    - name: Apply Custom defconfig and Load Kernel Config
-      run: |
-        cp /path/to/vendor/violet-perf_defconfig .config
-        # التعديلات على defconfig
-        sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/' .config
-        sed -i 's/# CONFIG_KSU_DEBUG is not set/CONFIG_KSU_DEBUG=n/' .config
-        sed -i 's/# CONFIG_KSU_MANUAL_HOOK is not set/CONFIG_KSU_MANUAL_HOOK=y/' .config
-        sed -i 's/# CONFIG_KSU_SUSFS is not set/CONFIG_KSU_SUSFS=y/' .config
-        sed -i 's/# CONFIG_KSU_SUSFS_SUS_PATH is not set/CONFIG_KSU_SUSFS_SUS_PATH=y/' .config
-        sed -i 's/# CONFIG_KSU_SUSFS_SUS_MOUNT is not set/CONFIG_KSU_SUSFS_SUS_MOUNT=y/' .config
-        sed -i 's/# CONFIG_KSU_SUSFS_SUS_KSTAT is not set/CONFIG_KSU_SUSFS_SUS_KSTAT=y/' .config
-        sed -i 's/# CONFIG_KSU_SUSFS_SPOOF_UNAME is not set/CONFIG_KSU_SUSFS_SPOOF_UNAME=y/' .config
-        sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=n/' .config
-        sed -i 's/# CONFIG_KPROBE_EVENTS is not set/CONFIG_KPROBE_EVENTS=n/' .config
+      # Create Flashable ZIP
+      - name: Create Flashable ZIP
+        run: |
+          echo "📦 Creating Flashable ZIP"
+          cd AnyKernel3
+          zip -r9 ../flashable_kernel.zip *
 
-        # تحميل إعدادات defconfig
-        make O=out ARCH=arm64 vendor/violet-perf_defconfig
-        make O=out ARCH=arm64
+      # Download zipsigner
+      - name: Download zipsigner
+        run: |
+          wget https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+          echo "📥 zipsigner Downloaded"
+      
+      # Sign the zip
+      - name: Sign the ZIP
+        run: |
+          java -jar zipsigner-3.0-dexed.jar flashable_kernel.zip flashable_kernel_signed.zip
+          echo "🔏 Kernel ZIP Signed"
 
-    - name: Build Kernel
-      run: |
-        make -j$(nproc) O=out
-
-    - name: Clone AnyKernel3 (sixteen)
-      run: |
-        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git AnyKernel3
-
-    - name: Copy Kernel Image
-      run: |
-        cp out/arch/arm64/boot/Image.gz AnyKernel3/
-        cp out/arch/arm64/boot/Image AnyKernel3/
-        cp out/arch/arm64/boot/dtbo.img AnyKernel3/ || true
-
-    - name: Create Flashable ZIP
-      run: |
-        cd AnyKernel3
-        zip -r9 ../kernel-violet-KSU-next-unsigned.zip *
-        cd ..
-
-    - name: Download zipsigner
-      run: |
-        wget -O zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-
-    - name: Sign ZIP
-      run: |
-        java -jar zipsigner.jar kernel-violet-KSU-next-unsigned.zip kernel-violet-KSU-next.zip
-
-    - name: Upload Flashable Kernel
-      uses: actions/upload-artifact@v4
-      with:
-        name: Flashable-Kernel
-        path: kernel-violet-KSU-next.zip
-
-    - name: Artificial Summary
-      run: |
-        echo "Build Summary:"
-        echo "-----------------------------------------"
-        echo "Kernel build completed successfully."
-        echo "KernelSU Next version: v1.1.1"
-        echo "SUSFS features are enabled."
-        echo "Proton Clang toolchain used for build."
-        echo "AnyKernel3 used for creating flashable zip."
-        echo "zipsigner was used to sign the zip file."
-        echo "-----------------------------------------"
-        echo "Please proceed to flash the kernel using TWRP or your preferred recovery method."
+      # Upload final build
+      - name: Upload final build
+        uses: actions/upload-artifact@v3
+        with:
+          name: flashable_kernel
+          path: flashable_kernel_signed.zip
