@@ -11,11 +11,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Set up Python 3.8
-      - name: Set up Python 3.8
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.8'
+      # Step 1: Checkout the repository
+      - name: Checkout KernelSU Next v1.1.1
+        run: git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git
 
       # Step 2: Install required dependencies
       - name: Install required dependencies
@@ -25,65 +23,67 @@ jobs:
           git libssl-dev libncurses5-dev lzop zip wget python3 \
           xz-utils libxml2-utils
 
-      # Step 3: Install Clang if needed
-      - name: Install Clang (if needed)
+      # Step 3: Install Clang and Proton Clang Toolchain
+      - name: Install Clang and Proton Clang Toolchain
         run: |
-          sudo apt-get install -y clang
+          sudo apt-get install -y clang llvm lld
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
+          echo "PATH=$GITHUB_WORKSPACE/proton-clang/bin:$PATH" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "LD=ld.lld" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "LLVM=1" >> $GITHUB_ENV
+          echo "LLVM_IAS=1" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+          echo "Proton Clang toolchain installed"
 
-      # Step 4: Install Proton Clang Toolchain
-      - name: Install Proton Clang Toolchain
-        run: |
-          sudo apt-get install -y clang-11 lld-11
-
-      # Step 5: Install Python dependencies for kernel building
-      - name: Install Python dependencies for kernel building
-        run: |
-          pip install -r requirements.txt
-
-      # Step 6: Install ARM Cross-Compiling Tools
-      - name: Install ARM Cross-Compiling Tools
-        run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      # Step 7: Checkout KernelSU Next v1.1.1
-      - name: Checkout KernelSU Next v1.1.1
-        run: git clone https://github.com/KernelSU/KernelSU.git && cd KernelSU && git checkout v1.1.1
-
-      # Step 8: Apply Custom defconfig and Load Kernel Config
+      # Step 4: Load Custom defconfig and Load Kernel Config
       - name: Apply Custom defconfig and Load Kernel Config
         run: |
-          cp /path/to/vendor/violet-perf_defconfig .config
-          make O=out vendor/violet-perf_defconfig
+          echo "🔧 Loading Custom Defconfig"
+          cp vendor/violet-perf_defconfig .config
+          echo "✅ Defconfig Loaded"
 
-      # Step 9: Build Kernel
+      # Step 5: Build the kernel
       - name: Build Kernel
         run: |
-          make -j$(nproc) O=out
+          echo "🚀 Building Kernel with Proton Clang"
+          make -j$(nproc) O=out ARCH=arm64
 
-      # Step 10: Clone AnyKernel3 (sixteen)
+      # Step 6: Clone AnyKernel3 (sixteen)
       - name: Clone AnyKernel3 (sixteen)
-        run: git clone --branch sixteen https://github.com/Red-A-Hawk/AnyKernel3.git
+        run: git clone --single-branch --branch sixteen https://github.com/Joker-V2/AnyKernel3.git
 
-      # Step 11: Copy Kernel Image
+      # Step 7: Copy Kernel Image
       - name: Copy Kernel Image
         run: |
+          echo "🔄 Copying Kernel Image"
           cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
 
-      # Step 12: Create Flashable ZIP
+      # Step 8: Create Flashable ZIP
       - name: Create Flashable ZIP
         run: |
+          echo "📦 Creating Flashable ZIP"
           cd AnyKernel3
-          zip -r9 ../kernel.zip *
+          zip -r9 ../flashable_kernel.zip *
 
-      # Step 13: Download zipsigner
+      # Step 9: Download zipsigner
       - name: Download zipsigner
         run: |
           wget https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-          java -jar zipsigner-3.0-dexed.jar kernel.zip signed_kernel.zip
+          echo "📥 zipsigner Downloaded"
+      
+      # Step 10: Sign the ZIP
+      - name: Sign the ZIP
+        run: |
+          java -jar zipsigner-3.0-dexed.jar flashable_kernel.zip flashable_kernel_signed.zip
+          echo "🔏 Kernel ZIP Signed"
 
-      # Step 14: Upload build artifact
-      - name: Upload build artifact
+      # Step 11: Upload final build
+      - name: Upload final build
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-artifacts
-          path: ./kernel.zip
+          name: flashable_kernel
+          path: flashable_kernel_signed.zip
