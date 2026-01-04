@@ -1,9 +1,8 @@
-name: Build Kernel (violet | KernelSU Next + SUSFS | Zyc Clang)
+name: Build Kernel (violet | Proton Clang | KernelSU Next | SUSFS | AK3)
 
 on:
   push:
-    branches:
-      - sixteen
+    branches: [ sixteen ]
   workflow_dispatch:
 
 jobs:
@@ -11,35 +10,34 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout source
+    - name: Checkout kernel source
       uses: actions/checkout@v4
 
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
-          git bc bison flex libssl-dev \
-          make ccache curl zip unzip \
+          bc bison flex libssl-dev \
+          make ccache git curl zip unzip \
           gcc-aarch64-linux-gnu \
           gcc-arm-linux-gnueabi \
           binutils-aarch64-linux-gnu \
-          binutils-arm-linux-gnueabi
+          binutils-arm-linux-gnueabi \
+          openjdk-17-jre
 
-    - name: Download ZyCromerZ Clang 22
+    - name: Download Proton Clang
       run: |
-        mkdir clang
-        curl -L \
-        https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz \
-        | tar -xz -C clang
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-    - name: Setup toolchain env
+    - name: Setup build env
       run: |
         echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
-        echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
         echo "LLVM=1" >> $GITHUB_ENV
         echo "LLVM_IAS=1" >> $GITHUB_ENV
 
@@ -55,9 +53,6 @@ jobs:
       run: |
         sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/' out/.config
         sed -i 's/# CONFIG_SUSFS is not set/CONFIG_SUSFS=y/' out/.config
-        sed -i 's/# CONFIG_SUSFS_SUS_PATH is not set/CONFIG_SUSFS_SUS_PATH=y/' out/.config
-        sed -i 's/# CONFIG_SUSFS_SUS_MOUNT is not set/CONFIG_SUSFS_SUS_MOUNT=y/' out/.config
-        sed -i 's/# CONFIG_SUSFS_SUS_KSTAT is not set/CONFIG_SUSFS_SUS_KSTAT=y/' out/.config
         sed -i 's/# CONFIG_SUSFS_SUS_MAPS is not set/CONFIG_SUSFS_SUS_MAPS=y/' out/.config
         make O=out olddefconfig
 
@@ -65,8 +60,27 @@ jobs:
       run: |
         make O=out -j$(nproc)
 
-    - name: Upload Image
+    - name: Prepare AnyKernel3
+      run: |
+        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3 ak3
+        cp out/arch/arm64/boot/Image.gz ak3/
+        cp out/arch/arm64/boot/dtbo.img ak3/
+
+    - name: Create flashable zip
+      run: |
+        cd ak3
+        zip -r9 ../kernel-violet-Proton-KSU-SUSFS.zip *
+
+    - name: Sign zip
+      run: |
+        curl -L -o zipsigner.jar \
+          https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner.jar \
+          kernel-violet-Proton-KSU-SUSFS.zip \
+          kernel-violet-Proton-KSU-SUSFS-signed.zip
+
+    - name: Upload final zip
       uses: actions/upload-artifact@v4
       with:
-        name: Image
-        path: out/arch/arm64/boot/Image
+        name: Kernel-violet-Proton
+        path: kernel-violet-Proton-KSU-SUSFS-signed.zip
