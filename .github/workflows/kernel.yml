@@ -1,90 +1,66 @@
-name: Build KernelSU Next Kernel
+name: Build Kernel with KernelSU Next v1.1.1 (non-GKI)
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout kernel source
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y \
-          bc bison build-essential ccache curl flex git gnupg \
-          libssl-dev libelf-dev lzop python3 unzip zip wget
-
-    # ==============================
-    # KernelSU Next v1.1.1 فقط
-    # ==============================
+    # 1️⃣ KernelSU Next v1.1.1
     - name: Setup KernelSU Next v1.1.1
       run: |
-        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.1.1/kernel/setup.sh | bash
+        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.1.1/next/kernel/setup.sh | bash
 
-    # ==============================
-    # Load defconfig
-    # ==============================
-    - name: Load defconfig
+    # 2️⃣ jonjeexe non-GKI patches
+    - name: Apply KernelSU non-GKI patches
       run: |
-        export ARCH=arm64
-        export SUBARCH=arm64
-        make O=out your_defconfig_name
+        git clone https://github.com/jonjeexe/KernelSU_Patches.git
+        cd KernelSU_Patches
+        bash Patch.sh
+        cd ..
 
-    # ==============================
-    # Enable KernelSU options
-    # ==============================
-    - name: Enable KernelSU
+    # 3️⃣ defconfig (مهم جدًا)
+    - name: Enable KernelSU configs
       run: |
-        ./scripts/config --file out/.config \
-          -e CONFIG_KSU \
-          -e CONFIG_KSU_MANUAL_HOOK
-        make O=out olddefconfig
+        echo "CONFIG_KSU=y" >> arch/arm64/configs/sixteen_defconfig
+        echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/sixteen_defconfig
 
-    # ==============================
-    # Build kernel
-    # ==============================
+    # 4️⃣ Build kernel
     - name: Build kernel
       run: |
         export ARCH=arm64
         export SUBARCH=arm64
-        make -j$(nproc) O=out
+        make sixteen_defconfig
+        make -j$(nproc)
 
-    # ==============================
-    # Prepare AnyKernel3
-    # ==============================
+    # 5️⃣ AnyKernel3
     - name: Prepare AnyKernel3
       run: |
         git clone https://github.com/osm0sis/AnyKernel3.git
-        cp out/arch/arm64/boot/Image.gz AnyKernel3/
-        if [ -f out/arch/arm64/boot/dtbo.img ]; then
-          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-        fi
+        cp arch/arm64/boot/Image AnyKernel3/
 
-    # ==============================
-    # Create flashable zip
-    # ==============================
+    # 6️⃣ Create zip
     - name: Create flashable zip
       run: |
         cd AnyKernel3
-        zip -r9 ../KernelSU-Next-Kernel.zip *
+        zip -r9 ../KernelSU-Next-nonGKI.zip *
 
-    # ==============================
-    # Sign zip
-    # ==============================
+    # 7️⃣ Sign zip
     - name: Sign zip
       run: |
-        wget https://github.com/zipsigner/zipsigner/releases/latest/download/zipsigner.jar
-        java -jar zipsigner.jar KernelSU-Next-Kernel.zip KernelSU-Next-Kernel-signed.zip
+        curl -LO https://github.com/Zackptg5/ZipSigner/releases/download/3.0/zipsigner-3.0.jar
+        java -jar zipsigner-3.0.jar KernelSU-Next-nonGKI.zip KernelSU-Next-nonGKI-signed.zip
 
-    # ==============================
-    # Upload
-    # ==============================
-    - name: Upload kernel zip
+    # 8️⃣ Upload
+    - name: Upload zip
       uses: actions/upload-artifact@v4
       with:
-        name: KernelSU-Next-Kernel
-        path: KernelSU-Next-Kernel-signed.zip
+        name: KernelSU-Next-nonGKI
+        path: KernelSU-Next-nonGKI-signed.zip
