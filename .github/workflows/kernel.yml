@@ -1,0 +1,90 @@
+name: Build KernelSU Next Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          bc bison build-essential ccache curl flex git gnupg \
+          libssl-dev libelf-dev lzop python3 unzip zip wget
+
+    # ==============================
+    # KernelSU Next v1.1.1 فقط
+    # ==============================
+    - name: Setup KernelSU Next v1.1.1
+      run: |
+        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.1.1/kernel/setup.sh | bash
+
+    # ==============================
+    # Load defconfig
+    # ==============================
+    - name: Load defconfig
+      run: |
+        export ARCH=arm64
+        export SUBARCH=arm64
+        make O=out your_defconfig_name
+
+    # ==============================
+    # Enable KernelSU options
+    # ==============================
+    - name: Enable KernelSU
+      run: |
+        ./scripts/config --file out/.config \
+          -e CONFIG_KSU \
+          -e CONFIG_KSU_MANUAL_HOOK
+        make O=out olddefconfig
+
+    # ==============================
+    # Build kernel
+    # ==============================
+    - name: Build kernel
+      run: |
+        export ARCH=arm64
+        export SUBARCH=arm64
+        make -j$(nproc) O=out
+
+    # ==============================
+    # Prepare AnyKernel3
+    # ==============================
+    - name: Prepare AnyKernel3
+      run: |
+        git clone https://github.com/osm0sis/AnyKernel3.git
+        cp out/arch/arm64/boot/Image.gz AnyKernel3/
+        if [ -f out/arch/arm64/boot/dtbo.img ]; then
+          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+        fi
+
+    # ==============================
+    # Create flashable zip
+    # ==============================
+    - name: Create flashable zip
+      run: |
+        cd AnyKernel3
+        zip -r9 ../KernelSU-Next-Kernel.zip *
+
+    # ==============================
+    # Sign zip
+    # ==============================
+    - name: Sign zip
+      run: |
+        wget https://github.com/zipsigner/zipsigner/releases/latest/download/zipsigner.jar
+        java -jar zipsigner.jar KernelSU-Next-Kernel.zip KernelSU-Next-Kernel-signed.zip
+
+    # ==============================
+    # Upload
+    # ==============================
+    - name: Upload kernel zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: KernelSU-Next-Kernel
+        path: KernelSU-Next-Kernel-signed.zip
