@@ -28,21 +28,25 @@ jobs:
       - name: Set up Python 3.8
         run: sudo apt-get install python3.8 python3-pip
 
-      # تثبيت Proton Clang Toolchain
-      - name: Install Proton Clang Toolchain
+      # تثبيت Proton Clang Toolchain من GitHub Releases
+      - name: Download Proton Clang
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
+          wget https://github.com/kdrag0n/proton-clang-build/releases/download/20200117/proton_clang-11.0.0-20200117.tar.zst
+          tar -I zstd -xf proton_clang-11.0.0-20200117.tar.zst
+          mv proton_clang-11.0.0-20200117 proton-clang
+
+      # إعداد بيئة Proton Clang
+      - name: Set Proton Clang Environment
+        run: |
           echo "PATH=$GITHUB_WORKSPACE/proton-clang/bin:$PATH" >> $GITHUB_ENV
           echo "CC=clang" >> $GITHUB_ENV
           echo "LD=ld.lld" >> $GITHUB_ENV
-          echo "ARCH=arm64" >> $GITHUB_ENV
-          echo "SUBARCH=arm64" >> $GITHUB_ENV
-          echo "LLVM=1" >> $GITHUB_ENV
-          echo "LLVM_IAS=1" >> $GITHUB_ENV
-          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+          echo "AR=llvm-ar" >> $GITHUB_ENV
+          echo "NM=llvm-nm" >> $GITHUB_ENV
+          echo "STRIP=llvm-strip" >> $GITHUB_ENV
+          echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
 
-      # تثبيت KernelSU Next v1.1.1 بعد تثبيت جميع الأدوات
+      # تثبيت KernelSU Next v1.1.1 بعد تثبيت Python
       - name: Checkout KernelSU Next v1.1.1
         run: |
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
@@ -53,10 +57,9 @@ jobs:
           cp /path/to/vendor/violet-perf_defconfig .config
           make olddefconfig
 
-      # بناء النواة باستخدام Proton Clang
-      - name: Build Kernel with Proton Clang
-        run: |
-          make -j$(nproc) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld
+      # بناء النواة
+      - name: Build Kernel
+        run: make -j$(nproc) O=out
 
       # استنساخ AnyKernel3 (sixteen)
       - name: Clone AnyKernel3 (sixteen)
