@@ -1,0 +1,96 @@
+name: Build Kernel Violet (Proton + KernelSU Next)
+
+on:
+  push:
+    branches:
+      - sixteen
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+      with:
+        ref: sixteen
+        fetch-depth: 1
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          bc bison flex libssl-dev \
+          make git curl zip unzip \
+          python3 openjdk-11-jre
+
+    - name: Setup Proton Clang
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+        echo "$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_PATH
+
+    - name: Setup KernelSU Next v1.1.1
+      run: |
+        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
+        cd KernelSU-Next
+        git checkout v1.1.1
+        cd ..
+        bash KernelSU-Next/kernel/setup.sh
+
+    - name: Export build environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+    - name: Load defconfig
+      run: |
+        make O=out vendor/violet-perf_defconfig
+
+    - name: Disable compat vDSO (permanent fix)
+      run: |
+        scripts/config --file out/.config \
+          -d CONFIG_COMPAT \
+          -d CONFIG_COMPAT_VDSO
+        make O=out olddefconfig
+
+    - name: Enable KernelSU configs
+      run: |
+        scripts/config --file out/.config \
+          -e CONFIG_KSU \
+          -e CONFIG_KSU_MANUAL_HOOK
+        make O=out olddefconfig
+
+    - name: Build kernel
+      run: |
+        make -j$(nproc) O=out
+
+    - name: Prepare AnyKernel3
+      run: |
+        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git AK3
+        cp out/arch/arm64/boot/Image.gz AK3/
+        cp out/arch/arm64/boot/dtbo.img AK3/
+
+    - name: Create flashable zip
+      run: |
+        cd AK3
+        zip -r9 kernel-violet.zip *
+
+    - name: Sign zip
+      run: |
+        cd AK3
+        curl -L -o zipsigner.jar \
+          https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner.jar kernel-violet.zip kernel-violet-signed.zip
+
+    - name: Upload flashable zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Violet-KSU-Next
+        path: AK3/kernel-violet-signed.zip
