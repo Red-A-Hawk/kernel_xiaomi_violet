@@ -43,11 +43,12 @@ jobs:
           cd kernel_xiaomi_violet
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-      # 6. تطبيق إعدادات defconfig و تحميل الإعدادات
+      # 6. تطبيق إعدادات defconfig المعدلة
       - name: Apply Custom defconfig and Load Kernel Config
         run: |
           cd kernel_xiaomi_violet
-          cp /path/to/vendor/violet-perf_defconfig .config
+          echo "Applying custom defconfig..."
+          cp vendor/violet-perf_defconfig .config
           make olddefconfig
 
       # 7. بناء النواة باستخدام Proton Clang
