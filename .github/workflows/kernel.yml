@@ -1,0 +1,97 @@
+name: Build Kernel (sixteen + KernelSU Next)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout kernel source (sixteen)
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        ref: sixteen
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git curl bc bison flex \
+          build-essential \
+          libssl-dev \
+          libelf-dev \
+          python3 \
+          zip unzip \
+          lld llvm
+
+    - name: Download & setup Clang (ZyCromerZ)
+      run: |
+        mkdir clang
+        cd clang
+        curl -L -o clang.tar.gz \
+          https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        tar -xf clang.tar.gz
+        echo "CLANG_PATH=$PWD/bin" >> $GITHUB_ENV
+        echo "$PWD/bin" >> $GITHUB_PATH
+
+    - name: Setup KernelSU Next v1.1.1
+      run: |
+        curl -LSs \
+          https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.1.1/kernel/setup.sh | bash
+
+    - name: Load defconfig
+      run: |
+        export ARCH=arm64
+        export O=out
+        make O=out ARCH=arm64 vendor/violet_defconfig
+
+    - name: Enable KernelSU + SUSFS
+      run: |
+        scripts/config --file out/.config \
+          -e CONFIG_KSU \
+          -e CONFIG_KSU_SUSFS \
+          -e CONFIG_KSU_MANUAL_HOOK
+
+        make O=out ARCH=arm64 olddefconfig
+
+    - name: Build kernel
+      run: |
+        export ARCH=arm64
+        export O=out
+        export CC=clang
+        export LD=ld.lld
+        export AR=llvm-ar
+        export NM=llvm-nm
+        export OBJCOPY=llvm-objcopy
+        export OBJDUMP=llvm-objdump
+        export STRIP=llvm-strip
+
+        make -j$(nproc) O=out ARCH=arm64
+
+    - name: Prepare AnyKernel3
+      run: |
+        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git AnyKernel3
+
+        cp out/arch/arm64/boot/Image.gz AnyKernel3/
+        cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+
+    - name: Create flashable zip
+      run: |
+        cd AnyKernel3
+        zip -r ../kernel-unsigned.zip *
+
+    - name: Sign zip (zipsigner)
+      run: |
+        curl -L -o zipsigner.jar \
+          https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+
+        java -jar zipsigner.jar \
+          kernel-unsigned.zip kernel-signed.zip
+
+    - name: Upload flashable zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-violet-KernelSU-Next
+        path: kernel-signed.zip
