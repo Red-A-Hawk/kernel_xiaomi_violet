@@ -1,4 +1,4 @@
-name: Build Kernel (violet | KSU Next 1.1.1)
+name: Build Kernel Violet (KSU Next v1.1.1)
 
 on:
   push:
@@ -13,86 +13,110 @@ jobs:
     env:
       ARCH: arm64
       SUBARCH: arm64
-      DEFCONFIG: vendor/violet-perf_defconfig
-      KSU_VERSION: v1.1.1
-      KSU_COMMIT: 0d6bdc63
 
     steps:
+    # =========================
+    # Checkout
+    # =========================
     - name: Checkout kernel source
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
 
-    - name: Verify kernel root
-      run: |
-        if [ ! -d "drivers" ]; then
-          echo "❌ ERROR: drivers/ not found"
-          exit 127
-        fi
-
+    # =========================
+    # Dependencies
+    # =========================
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
-          bc bison build-essential curl flex git \
-          libssl-dev libelf-dev \
-          zip unzip python3
+          bc bison build-essential ccache curl flex git \
+          libssl-dev libelf-dev lz4 rsync unzip zip \
+          python3 openjdk-17-jre
 
-    - name: Clone Proton Clang
+    # =========================
+    # Proton Clang
+    # =========================
+    - name: Setup Proton Clang
       run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+        echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    - name: Setup toolchain
-      run: |
-        echo "PATH=$PWD/clang/bin:$PATH" >> $GITHUB_ENV
-        echo "CC=clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "LLVM=1" >> $GITHUB_ENV
-        echo "LLVM_IAS=1" >> $GITHUB_ENV
-
-    - name: Apply KernelSU Next v1.1.1 (LOCKED)
+    # =========================
+    # KernelSU Next v1.1.1 (LOCKED)
+    # =========================
+    - name: Apply KernelSU Next v1.1.1
       run: |
         rm -rf ksu KernelSU-Next
+        git clone https://github.com/KernelSU-Next/KernelSU-Next.git -b v1.1.1 ksu
+        cp -r ksu/kernel/* ./
+        echo "KernelSU Next v1.1.1 merged"
 
-        git clone --depth=1 --branch $KSU_VERSION \
-          https://github.com/KernelSU-Next/KernelSU-Next.git ksu
-
-        cd ksu
-        git checkout $KSU_COMMIT
-        cd ..
-
-        # منع أي auto-upgrade
-        sed -i '/git fetch --tags/d' ksu/setup.sh
-        sed -i '/git describe/d' ksu/setup.sh
-        sed -i '/latest tag/d' ksu/setup.sh
-
-        # تشغيل setup من جذر الكيرنل
-        bash ksu/setup.sh
-
+    # =========================
+    # Defconfig
+    # =========================
     - name: Load defconfig
       run: |
-        make O=out $DEFCONFIG
+        make O=out vendor/violet-perf_defconfig
 
+    - name: Enable KernelSU + SUSFS config
+      run: |
+        CONFIG=out/.config
+        scripts/config --file $CONFIG \
+          -e CONFIG_HAVE_KPROBES \
+          -e CONFIG_KPROBES \
+          -e CONFIG_KPROBE_EVENTS \
+          -e CONFIG_KSU \
+          -e CONFIG_KSU_LSM_SECURITY_HOOKS \
+          -e CONFIG_KSU_SUSFS \
+          -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
+          -e CONFIG_KSU_SUSFS_SUS_PATH \
+          -e CONFIG_KSU_SUSFS_SUS_MOUNT \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+          -e CONFIG_KSU_SUSFS_SUS_KSTAT \
+          -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+          -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+          -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+          -e CONFIG_KSU_SUSFS_ENABLE_LOG \
+          -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+        make O=out olddefconfig
+
+    # =========================
+    # Build Kernel
+    # =========================
     - name: Build kernel
       run: |
-        make -j$(nproc) O=out \
-          ARCH=arm64 \
+        make O=out -j$(nproc) \
           CC=clang \
           LD=ld.lld \
           LLVM=1 \
-          LLVM_IAS=1 \
-          2>&1 | tee build.log
+          LLVM_IAS=1
 
-    - name: Collect artifacts
+    # =========================
+    # AnyKernel3
+    # =========================
+    - name: Package AnyKernel3
       run: |
-        mkdir -p artifacts
-        cp out/arch/arm64/boot/Image.gz artifacts/
-        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img artifacts/ || true
-        cp out/.config artifacts/kernel.config
-        cp build.log artifacts/
+        git clone https://github.com/Joker-V2/AnyKernel3.git -b sixteen AnyKernel3
+        cp out/arch/arm64/boot/Image.gz AnyKernel3/
+        cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+        cd AnyKernel3
+        zip -r9 ../AnyKernel3.zip *
 
-    - name: Upload artifacts
+    # =========================
+    # Zipsigner
+    # =========================
+    - name: Sign ZIP
+      run: |
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar -O zipsigner.jar
+        java -jar zipsigner.jar AnyKernel3.zip Violet-KSU-v1.1.1-signed.zip
+
+    # =========================
+    # Upload
+    # =========================
+    - name: Upload flashable ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: violet-kernel-build
-        path: artifacts/*
+        name: Violet-KernelSU-v1.1.1
+        path: Violet-KSU-v1.1.1-signed.zip
