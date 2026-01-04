@@ -1,4 +1,4 @@
-name: Build KernelSU Next (violet | sixteen)
+name: Build Kernel (violet | KernelSU Next v1.1.1)
 
 on:
   push:
@@ -11,90 +11,75 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    # 1️⃣ جلب سورس النواة
-    - name: Checkout kernel source
-      uses: actions/checkout@v4
-      with:
-        ref: sixteen
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
 
-    # 2️⃣ تثبيت المتطلبات
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y \
-          git bc bison flex libssl-dev \
-          make zip unzip curl \
-          libelf-dev libncurses5-dev \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            git bc bison flex libssl-dev \
+            make ccache curl zip unzip \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
+            binutils-aarch64-linux-gnu \
+            binutils-arm-linux-gnueabi \
+            openjdk-11-jre
 
-    # 3️⃣ إعداد Proton Clang
-    - name: Setup Proton Clang
-      run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
-        echo "$PWD/clang/bin" >> $GITHUB_PATH
+      - name: Clone Proton Clang
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-    # 4️⃣ دمج KernelSU Next v1.1.1
-    - name: Setup KernelSU Next v1.1.1
-      run: |
-        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
-        cd KernelSU-Next
-        git checkout v1.1.1
-        cd ..
-        bash KernelSU-Next/kernel/setup.sh
+      - name: Setup build environment
+        run: |
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+          echo "LLVM=1" >> $GITHUB_ENV
+          echo "LLVM_IAS=1" >> $GITHUB_ENV
 
-    # 5️⃣ متغيرات البناء
-    - name: Export build environment
-      run: |
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "CC=clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "LLVM=1" >> $GITHUB_ENV
-        echo "LLVM_IAS=1" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+      - name: Apply KernelSU Next v1.1.1
+        run: |
+          git clone --branch v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git ksu
+          bash ksu/kernel/setup.sh
 
-    # 6️⃣ تحميل defconfig
-    - name: Load defconfig
-      run: |
-        make O=out vendor/violet-perf_defconfig
+      - name: Load defconfig
+        run: |
+          make O=out vendor/violet-perf_defconfig
+          make O=out olddefconfig
 
-    # 7️⃣ تفعيل الحد الأدنى لـ KernelSU
-    - name: Enable KernelSU config
-      run: |
-        scripts/config --file out/.config \
-          -e CONFIG_KSU \
-          -e CONFIG_KPROBES \
-          -e CONFIG_KPROBE_EVENTS
-        make O=out olddefconfig
+      - name: Build kernel
+        run: |
+          make O=out -j$(nproc)
 
-    # 8️⃣ بناء النواة
-    - name: Build kernel
-      run: |
-        make O=out -j$(nproc)
+      - name: Clone AnyKernel3
+        run: |
+          git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git anykernel
 
-    # 9️⃣ تحضير AnyKernel3 + أخذ Image.gz و dtbo.img من البناء
-    - name: Package with AnyKernel3
-      run: |
-        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git
+      - name: Copy kernel images
+        run: |
+          cp out/arch/arm64/boot/Image.gz anykernel/
+          cp out/arch/arm64/boot/dtbo.img anykernel/
 
-        # Image.gz من ناتج البناء
-        cp out/arch/arm64/boot/Image.gz AnyKernel3/
+      - name: Package AnyKernel3
+        run: |
+          cd anykernel
+          zip -r ../AnyKernel3.zip *
 
-        # dtbo.img من ناتج البناء (إن وجد)
-        if [ -f out/arch/arm64/boot/dtbo.img ]; then
-          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-        else
-          echo "⚠️ dtbo.img not found, continuing without it"
-        fi
+      - name: Download zipsigner
+        run: |
+          curl -L -o zipsigner.jar \
+          https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
 
-        cd AnyKernel3
-        zip -r9 ../KernelSU-Violet.zip *
+      - name: Sign ZIP
+        run: |
+          java -jar zipsigner.jar AnyKernel3.zip violet-KSU-Next-v1.1.1-signed.zip
 
-    # 🔟 رفع ZIP
-    - name: Upload flashable ZIP
-      uses: actions/upload-artifact@v4
-      with:
-        name: KernelSU-Violet
-        path: KernelSU-Violet.zip
+      - name: Upload signed ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: violet-kernel-KSU-Next
+          path: violet-KSU-Next-v1.1.1-signed.zip
