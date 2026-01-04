@@ -1,0 +1,88 @@
+name: Build Kernel (violet | Proton Clang | KernelSU Next | AnyKernel3)
+
+on:
+  push:
+    branches:
+      - sixteen
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git bc bison flex libssl-dev \
+          make ccache curl zip unzip \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi \
+          binutils-aarch64-linux-gnu \
+          binutils-arm-linux-gnueabi \
+          openjdk-11-jre
+
+    - name: Download Proton Clang
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+
+    - name: Setup build env
+      run: |
+        echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+
+    # 🔥 KernelSU Next (الدمج الصحيح)
+    - name: Integrate KernelSU Next
+      run: |
+        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh | bash -
+
+    - name: Load defconfig
+      run: |
+        make O=out vendor/violet-perf_defconfig
+
+    - name: Enable KernelSU + SUSFS
+      run: |
+        sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/' out/.config
+        sed -i 's/# CONFIG_SUSFS is not set/CONFIG_SUSFS=y/' out/.config
+        make O=out olddefconfig
+
+    - name: Build kernel
+      run: |
+        make O=out -j$(nproc)
+
+    # ================= AnyKernel3 =================
+    - name: Prepare AnyKernel3
+      run: |
+        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git anykernel
+        cp out/arch/arm64/boot/Image.gz anykernel/
+        cp out/arch/arm64/boot/dtbo.img anykernel/
+
+    - name: Create flashable zip
+      run: |
+        cd anykernel
+        zip -r ../kernel-unsigned.zip *
+
+    - name: Download zipsigner
+      run: |
+        curl -Lo zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+
+    - name: Sign zip
+      run: |
+        java -jar zipsigner.jar kernel-unsigned.zip kernel-signed.zip
+
+    - name: Upload signed kernel
+      uses: actions/upload-artifact@v4
+      with:
+        name: KernelSU-Next-violet
+        path: kernel-signed.zip
