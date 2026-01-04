@@ -1,4 +1,4 @@
-name: Build Kernel (violet | KSU Next 1.1.1 | Manual Hook)
+name: Kernel Build (violet | KSU Next 1.1.1 | AnyKernel3)
 
 on:
   push:
@@ -11,91 +11,79 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
+      - name: Checkout kernel source
         uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
-            git bc bison flex libssl-dev \
-            make ccache curl zip unzip \
-            gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi \
-            binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabi \
+            bc bison flex build-essential \
+            libssl-dev libelf-dev \
+            git curl zip unzip \
             openjdk-11-jre-headless
 
-      - name: Download Proton Clang
+      # ===== Proton Clang =====
+      - name: Setup Proton Clang
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+          echo "$GITHUB_WORKSPACE/clang/bin" >> $GITHUB_PATH
 
-      - name: Setup toolchain env
+      # ===== KernelSU Next v1.1.1 =====
+      - name: Apply KernelSU Next v1.1.1
         run: |
-          echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
-          echo "ARCH=arm64" >> $GITHUB_ENV
-          echo "SUBARCH=arm64" >> $GITHUB_ENV
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
-          echo "LLVM=1" >> $GITHUB_ENV
-          echo "LLVM_IAS=1" >> $GITHUB_ENV
-
-      - name: Setup KernelSU Next v1.1.1
-        run: |
-          git clone https://github.com/KernelSU-Next/KernelSU-Next.git ksu
-          cd ksu
+          rm -rf KernelSU-Next
+          git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          cd KernelSU-Next
           git checkout v1.1.1
-          bash kernel/setup.sh
           cd ..
+          bash KernelSU-Next/kernel/setup.sh
 
+      # ===== Defconfig =====
       - name: Load defconfig
         run: |
-          make O=out vendor/violet-perf_defconfig
+          make O=out ARCH=arm64 vendor/violet-perf_defconfig
 
-      - name: Enable KernelSU + SUSFS config
-        run: |
-          cat << 'EOF' >> out/.config
-          CONFIG_KSU=y
-          CONFIG_KSU_MANUAL_HOOK=y
-          CONFIG_KSU_LSM_SECURITY_HOOKS=y
-          CONFIG_KPROBES=n
-          CONFIG_KPROBE_EVENTS=n
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          EOF
-          make O=out olddefconfig
-
+      # ===== Build Kernel =====
       - name: Build kernel
         run: |
-          make O=out -j$(nproc)
+          make -j$(nproc) O=out \
+            ARCH=arm64 \
+            CC=clang \
+            LD=ld.lld
 
-      - name: Prepare AnyKernel3
+      # ===== AnyKernel3 =====
+      - name: Clone AnyKernel3 (sixteen)
         run: |
-          git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git ak3
-          cp out/arch/arm64/boot/Image.gz ak3/
-          cp out/arch/arm64/boot/dtbo.img ak3/
+          git clone -b sixteen https://github.com/Joker-V2/AnyKernel3 AnyKernel3
+          rm -rf AnyKernel3/.git
 
-      - name: Zip kernel
+      - name: Copy Image.gz and dtbo.img
         run: |
-          cd ak3
-          zip -r kernel.zip *
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/
+          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+
+      - name: Create flashable zip
+        run: |
+          cd AnyKernel3
+          zip -r9 ../kernel-unsigned.zip *
+
+      # ===== zipsigner =====
+      - name: Download zipsigner
+        run: |
+          curl -L \
+          https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar \
+          -o zipsigner.jar
 
       - name: Sign zip
         run: |
-          curl -L -o zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-          java -jar zipsigner.jar kernel.zip kernel-signed.zip
+          java -jar zipsigner.jar \
+            kernel-unsigned.zip \
+            kernel-KSU-Next-1.1.1-signed.zip
 
-      - name: Upload artifact
+      # ===== Upload =====
+      - name: Upload signed kernel
         uses: actions/upload-artifact@v4
         with:
           name: violet-kernel-KSU-1.1.1
-          path: ak3/kernel-signed.zip
+          path: kernel-KSU-Next-1.1.1-signed.zip
