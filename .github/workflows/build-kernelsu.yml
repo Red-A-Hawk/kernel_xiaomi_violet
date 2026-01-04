@@ -49,11 +49,39 @@ jobs:
     - name: Add Clang to PATH
       run: echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    # 4️⃣ دمج KernelSU Next v1.1.1
-    - name: Setup KernelSU Next v1.1.1
+    # 4️⃣ دمج KernelSU Next مع SUSFS
+    - name: Setup KernelSU Next with SUSFS support
       run: |
-        git clone --depth=1 -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
-        bash KernelSU-Next/kernel/setup.sh
+        # استخدام repo يحتوي على SUSFS
+        git clone --depth=1 https://github.com/rifsxd/KernelSU-Next.git KSU-SUSFS
+        
+        # عرض جميع SUSFS configs المتاحة
+        echo "🔍 Available SUSFS configs:"
+        grep -r "config KSU_SUSFS" KSU-SUSFS/kernel/ 2>/dev/null | grep -o "config KSU_SUSFS[A-Z_]*" | sort -u || true
+        
+        # التحقق من وجود SUSFS
+        if grep -rq "CONFIG_KSU_SUSFS" KSU-SUSFS/kernel/ 2>/dev/null; then
+          echo "✅ SUSFS support confirmed!"
+        else
+          echo "❌ SUSFS not found!"
+          exit 1
+        fi
+        
+        # دمج KernelSU
+        bash KSU-SUSFS/kernel/setup.sh
+        
+        # التحقق من نجاح الدمج
+        if [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ]; then
+          echo "✅ KernelSU integrated successfully"
+          
+          # عرض معلومات النسخة
+          if [ -f "KernelSU/kernel/Kconfig" ]; then
+            echo "📋 KernelSU directory structure verified"
+          fi
+        else
+          echo "❌ KernelSU integration failed"
+          exit 1
+        fi
 
     # 5️⃣ متغيرات البناء
     - name: Export build environment
@@ -72,34 +100,99 @@ jobs:
       run: |
         make O=out vendor/violet-perf_defconfig
 
-    # 7️⃣ تفعيل KernelSU configs مع SUSFS
+    # 7️⃣ تفعيل KernelSU configs مع SUSFS (كل الميزات)
     - name: Enable KernelSU + SUSFS config
       run: |
+        # تفعيل KernelSU الأساسي
         scripts/config --file out/.config \
           -e CONFIG_KSU \
           -e CONFIG_KSU_LSM_SECURITY_HOOKS \
           -e CONFIG_KSU_MANUAL_HOOK \
-          -d CONFIG_KSU_DEBUG \
+          -d CONFIG_KSU_DEBUG
+        
+        # تفعيل SUSFS - الميزات الأساسية
+        scripts/config --file out/.config \
           -e CONFIG_KSU_SUSFS \
-          -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
+          -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
+        
+        # SUSFS - إخفاء المسارات والـ Mounts
+        scripts/config --file out/.config \
           -e CONFIG_KSU_SUSFS_SUS_PATH \
           -e CONFIG_KSU_SUSFS_SUS_MOUNT \
           -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+        
+        # SUSFS - Kernel Stats و Try Umount
+        scripts/config --file out/.config \
           -e CONFIG_KSU_SUSFS_SUS_KSTAT \
           -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
-          -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
+        
+        # SUSFS - Spoofing Features
+        scripts/config --file out/.config \
           -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+          -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+        
+        # SUSFS - إخفاء وحماية متقدمة
+        scripts/config --file out/.config \
           -e CONFIG_KSU_SUSFS_ENABLE_LOG \
           -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-          -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT
+        
+        # SUSFS - ميزات إضافية (قد لا تكون متوفرة في كل النسخ)
+        scripts/config --file out/.config \
+          -e CONFIG_KSU_SUSFS_SUS_SU \
+          -e CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
+          -e CONFIG_KSU_SUSFS_ALLOW_SU_TO_OTHER_TASK \
+          -e CONFIG_KSU_SUSFS_SUS_MAPS \
+          -e CONFIG_KSU_SUSFS_SUS_PROC_FD_LINK \
+          -e CONFIG_KSU_SUSFS_SUS_KPROBE \
+          -e CONFIG_KSU_SUSFS_SPOOF_SELINUX_HOOKS
+        
+        # إعدادات Kernel - Manual Hooks (معطّلة KPROBES)
+        scripts/config --file out/.config \
           -d CONFIG_KPROBES \
           -d CONFIG_KPROBE_EVENTS \
           -e CONFIG_HAVE_KERNEL_XZ \
           -e CONFIG_COMPAT_VDSO \
           -d CONFIG_MODULE_SIG
+        
+        # تطبيق التغييرات
         make O=out olddefconfig
+        
+        # التحقق من تفعيل SUSFS وعدم التعارض
+        echo "🔍 Verifying SUSFS configs..."
+        if grep -q "CONFIG_KSU_SUSFS=y" out/.config; then
+          echo "✅ CONFIG_KSU_SUSFS is enabled"
+          
+          # عد الـ configs المفعلة
+          SUSFS_COUNT=$(grep "CONFIG_KSU_SUSFS.*=y" out/.config | wc -l)
+          echo "📊 Total SUSFS configs enabled: $SUSFS_COUNT"
+          
+          # عرض القائمة الكاملة
+          echo "📋 Enabled SUSFS configs:"
+          grep "CONFIG_KSU_SUSFS.*=y" out/.config | sed 's/=y//' || true
+        else
+          echo "⚠️ CONFIG_KSU_SUSFS is NOT enabled - SUSFS may not be available"
+          echo "Continuing build anyway..."
+        fi
+        
+        # التحقق من عدم التعارض
+        echo "🔍 Verifying hook configuration..."
+        if grep -q "CONFIG_KSU_MANUAL_HOOK=y" out/.config; then
+          echo "✅ Using Manual Hooks"
+          if grep -q "CONFIG_KPROBES=y" out/.config; then
+            echo "⚠️ WARNING: KPROBES is enabled with Manual Hooks - This may cause issues!"
+          else
+            echo "✅ KPROBES correctly disabled"
+          fi
+        else
+          if grep -q "CONFIG_KPROBES=y" out/.config; then
+            echo "✅ Using Kprobes method"
+          else
+            echo "⚠️ WARNING: Neither Manual Hooks nor Kprobes are enabled!"
+          fi
+        fi
 
     # 8️⃣ بناء النواة
     - name: Build kernel
@@ -200,15 +293,23 @@ jobs:
           🔥 **KernelSU Next Build for Xiaomi Violet**
           
           📱 Device: Redmi Note 7 Pro (violet)
-          🔧 KernelSU Version: v1.1.1 Next
+          🔧 KernelSU: Next with SUSFS
           📅 Build Date: ${{ github.event.head_commit.timestamp }}
           🔨 Compiler: ZyCromerZ Clang 15.0.7
           
           **Features:**
-          ✅ KernelSU Next v1.1.1
-          ✅ SUSFS Full Support
+          ✅ KernelSU Next
+          ✅ SUSFS Full Support ✨
           ✅ Manual Hooks (No Kprobes)
           ✅ Signed with zipsigner-3.0-dexed
+          
+          **SUSFS Features:**
+          • Magic Mount hiding
+          • Path & Mount spoofing  
+          • Kernel stat hiding
+          • Uname spoofing
+          • Cmdline/Bootconfig spoofing
+          • Open redirect
           
           **How to Flash:**
           1. Boot to recovery (TWRP/OrangeFox)
