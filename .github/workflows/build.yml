@@ -3,7 +3,8 @@ name: Kernel Build Script with Dependencies
 on:
   push:
     branches:
-      - main
+      - sixteen  # التأكد من الفرع "sixteen" في حالة الدفع
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,10 +14,16 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v2
 
-    - name: Checkout sixteen branch
+    - name: Check branch
+      run: |
+        echo "Workflow is running on branch:"
+        echo "$GITHUB_REF"
+        echo "If you see this, Actions WORK ✅"
+
+    - name: Ensure 'sixteen' branch exists
       run: |
         git fetch origin
-        git checkout sixteen || git checkout -b sixteen
+        git checkout sixteen || git checkout -b sixteen  # التأكد من الفرع sixteen موجود
 
     - name: Set up Python 3.8
       uses: actions/setup-python@v2
