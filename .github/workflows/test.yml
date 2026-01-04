@@ -1,13 +1,18 @@
-name: TEST WORKFLOW
+name: TEST sixteen branch
 
 on:
+  push:
+    branches:
+      - sixteen
   workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Hello
+      - name: Check branch
         run: |
-          echo "GitHub Actions works!"
-          uname -a
+          echo "Workflow is running on branch:"
+          echo "$GITHUB_REF"
+          echo "If you see this, Actions WORK ✅"
