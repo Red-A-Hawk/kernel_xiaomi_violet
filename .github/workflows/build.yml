@@ -3,18 +3,18 @@ name: Build Kernel
 on:
   push:
     branches:
-      - sixteen
-  workflow_dispatch:
+      - sixteen  # يقوم بتشغيل السكربت عند الدفع إلى فرع 'sixteen'
+  workflow_dispatch:  # يتيح تشغيل السكربت يدويًا عبر واجهة GitHub Actions
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # يحدد النظام المستخدم (Ubuntu آخر إصدار)
 
     steps:
       # 1. تحقق من المستودع والتأكد من أنه موجود
       - name: Check if repository exists
         run: |
-          git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git || exit 1
+          git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git || (echo "Failed to clone repository" && exit 1)
 
       # 2. تثبيت الاعتمادات المطلوبة بعد التأكد من المستودع
       - name: Install required dependencies
@@ -22,7 +22,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential curl flex \
           git libssl-dev libncurses5-dev lzop zip wget python3 \
-          xz-utils libxml2-utils
+          xz-utils libxml2-utils || (echo "Dependency installation failed!" && exit 1)
 
       # 3. تثبيت Python 3.8 و pip
       - name: Set up Python 3.8
@@ -36,6 +36,7 @@ jobs:
           export PATH=$PWD/proton_clang-11.0.0-20200117/bin:$PATH
           export CROSS_COMPILE=$PWD/proton_clang-11.0.0-20200117/bin/aarch64-linux-gnu-
           export ARCH=arm64
+          which clang || (echo "Proton Clang not found!" && exit 1)
 
       # 5. تحميل وتثبيت KernelSU Next v1.1.1 بعد تثبيت الأدوات
       - name: Checkout KernelSU Next v1.1.1
@@ -43,37 +44,47 @@ jobs:
           cd kernel_xiaomi_violet
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-      # 6. تطبيق إعدادات defconfig المعدلة
-      - name: Apply Custom defconfig and Load Kernel Config
+      # 6. تطبيق إعدادات defconfig من المسار الصحيح
+      - name: Apply Custom defconfig from vendor directory
         run: |
           cd kernel_xiaomi_violet
-          echo "Applying custom defconfig..."
-          cp vendor/violet-perf_defconfig .config
-          make olddefconfig
+          echo "Applying custom defconfig for KernelSU Next..."
+          cp vendor/violet-perf_defconfig .config  # نسخ الإعدادات من ملف 'violet-perf_defconfig' إلى '.config'
+          
+          # تطبيق التكوين باستخدام make olddefconfig
+          make olddefconfig || (echo "Failed to apply defconfig!" && exit 1)
+          
+          # تحقق من وجود ملف .config الجديد
+          if [ ! -f .config ]; then
+            echo "Failed to apply the configuration!"
+            exit 1
+          fi
+          echo "Custom defconfig applied successfully."
 
       # 7. بناء النواة باستخدام Proton Clang
       - name: Build Kernel with Proton Clang
         run: |
           cd kernel_xiaomi_violet
-          make -j$(nproc) O=out
+          make -j$(nproc) O=out || (echo "Kernel build failed!" && exit 1)
 
       # 8. استنساخ AnyKernel3 (sixteen)
       - name: Clone AnyKernel3 (sixteen)
         run: |
           cd kernel_xiaomi_violet
-          git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/AnyKernel3.git
+          git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/AnyKernel3.git || (echo "Failed to clone AnyKernel3" && exit 1)
 
-      # 9. نسخ صورة النواة إلى مجلد AnyKernel3
-      - name: Copy Kernel Image
+      # 9. نسخ صورة النواة و dtbo.img إلى مجلد AnyKernel3
+      - name: Copy Kernel Image and dtbo.img
         run: |
           cd kernel_xiaomi_violet
           cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3
+          cp out/arch/arm64/boot/dtbo.img AnyKernel3
 
       # 10. إنشاء ملف Flashable ZIP
       - name: Create Flashable ZIP
         run: |
           cd AnyKernel3
-          zip -r9 ../kernel.zip .
+          zip -r9 ../kernel.zip . || (echo "Failed to create flashable ZIP" && exit 1)
 
       # 11. تنزيل zipsigner
       - name: Download zipsigner
@@ -83,7 +94,11 @@ jobs:
       # 12. توقيع ملف الـ ZIP النهائي
       - name: Sign the Flashable ZIP
         run: |
-          java -jar zipsigner-3.0-dexed.jar kernel.zip kernel_signed.zip
+          if [ ! -f kernel.zip ]; then
+            echo "Kernel ZIP file does not exist!"
+            exit 1
+          fi
+          java -jar zipsigner-3.0-dexed.jar kernel.zip kernel_signed.zip || (echo "Failed to sign the ZIP" && exit 1)
 
       # 13. رفع ملف الـ Flashable ZIP الموقع
       - name: Upload signed flashable kernel
