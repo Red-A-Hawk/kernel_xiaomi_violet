@@ -1,0 +1,90 @@
+name: Build Kernel (sixteen)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout kernel source (sixteen)
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        ref: sixteen
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          bc bison flex libssl-dev \
+          make gcc clang lld llvm \
+          git wget curl zip unzip \
+          ccache build-essential
+
+    - name: Setup Proton Clang
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+
+    - name: Setup ARM32 GCC
+      run: |
+        git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc32
+
+    - name: Setup KernelSU Next v1.1.1
+      run: |
+        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.1.1/kernel/setup.sh | bash
+
+    - name: Export build environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "PATH=$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "AR=llvm-ar" >> $GITHUB_ENV
+        echo "NM=llvm-nm" >> $GITHUB_ENV
+        echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
+        echo "OBJDUMP=llvm-objdump" >> $GITHUB_ENV
+        echo "STRIP=llvm-strip" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+
+    - name: Load defconfig
+      run: |
+        make O=out your_defconfig
+
+    - name: Enable KernelSU configs
+      run: |
+        scripts/config --file out/.config \
+          -e CONFIG_KSU \
+          -e CONFIG_KSU_MANUAL_HOOK
+        make O=out olddefconfig
+
+    - name: Build kernel
+      run: |
+        make O=out -j$(nproc)
+
+    - name: Prepare AnyKernel3
+      run: |
+        git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3 anykernel
+        cp out/arch/arm64/boot/Image.gz anykernel/
+        if [ -f out/arch/arm64/boot/dtbo.img ]; then
+          cp out/arch/arm64/boot/dtbo.img anykernel/
+        fi
+
+    - name: Create flashable zip
+      run: |
+        cd anykernel
+        zip -r9 ../kernel.zip *
+
+    - name: Sign zip
+      run: |
+        wget https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner-3.0-dexed.jar kernel.zip kernel-signed.zip
+
+    - name: Upload flashable zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-flashable
+        path: kernel-signed.zip
