@@ -35,7 +35,7 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    - name: Clone and Checkout KernelSU Next v1.1.1
+    - name: Checkout KernelSU Next v1.1.1
       run: |
         git clone https://github.com/KernelSU-Next/KernelSU-Next.git
         cd KernelSU-Next
@@ -43,16 +43,31 @@ jobs:
         cd ..
         bash KernelSU-Next/kernel/setup.sh
 
-    - name: Load defconfig
+    - name: Apply Custom defconfig and Load Kernel Config
       run: |
         make O=out vendor/violet-perf_defconfig
 
+        # Custom Config Adjustments (Example)
+        sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/' out/.config
+        sed -i 's/# CONFIG_KSU_DEBUG is not set/CONFIG_KSU_DEBUG=n/' out/.config
+        sed -i 's/# CONFIG_KSU_MANUAL_HOOK is not set/CONFIG_KSU_MANUAL_HOOK=y/' out/.config
+        sed -i 's/# CONFIG_KSU_SUSFS is not set/CONFIG_KSU_SUSFS=y/' out/.config
+        sed -i 's/# CONFIG_KSU_SUSFS_SUS_PATH is not set/CONFIG_KSU_SUSFS_SUS_PATH=y/' out/.config
+        sed -i 's/# CONFIG_KSU_SUSFS_SUS_MOUNT is not set/CONFIG_KSU_SUSFS_SUS_MOUNT=y/' out/.config
+        sed -i 's/# CONFIG_KSU_SUSFS_SUS_KSTAT is not set/CONFIG_KSU_SUSFS_SUS_KSTAT=y/' out/.config
+        sed -i 's/# CONFIG_KSU_SUSFS_SPOOF_UNAME is not set/CONFIG_KSU_SUSFS_SPOOF_UNAME=y/' out/.config
+        sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=n/' out/.config
+        sed -i 's/# CONFIG_KPROBE_EVENTS is not set/CONFIG_KPROBE_EVENTS=n/' out/.config
+
     - name: Build the Kernel
       run: |
-        make O=out -j$(nproc) \
-          CC=clang \
-          LD=ld.lld \
-          KCFLAGS="-Wno-error"
+        make O=out -j$(nproc) CC=clang LD=ld.lld
+        if [ $? -eq 0 ]; then
+          echo "Kernel build successful!"
+        else
+          echo "Kernel build failed, please check the error logs above."
+          exit 1
+        fi
 
     - name: Clone AnyKernel3 (sixteen)
       run: |
