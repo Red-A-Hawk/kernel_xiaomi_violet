@@ -1,4 +1,4 @@
-name: Build Kernel sixteen (FINAL)
+name: Build Kernel Violet
 
 on:
   workflow_dispatch:
@@ -19,50 +19,42 @@ jobs:
         sudo apt update
         sudo apt install -y \
           bc bison flex libssl-dev \
-          make gcc git curl zip unzip \
-          python3 clang lld llvm \
-          ccache build-essential
+          make clang lld \
+          git curl zip unzip \
+          python3
 
-    # ===== Proton Clang =====
     - name: Setup Proton Clang
       run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+        echo "$(pwd)/clang/bin" >> $GITHUB_PATH
 
-    # ===== ARM32 toolchain (THE FIX) =====
-    - name: Setup ARM32 GCC
-      run: |
-        git clone --depth=1 \
-        https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
-        gcc32
-
-    # ===== KernelSU Next v1.1.1 =====
     - name: Setup KernelSU Next v1.1.1
       run: |
-        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.1.1/kernel/setup.sh | bash
+        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
+        cd KernelSU-Next
+        git checkout v1.1.1
+        cd ..
+        bash KernelSU-Next/kernel/setup.sh
 
-    # ===== EXPORT ENV (IMPORTANT) =====
     - name: Export build environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
-
-        echo "PATH=$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc32/bin:$PATH" >> $GITHUB_ENV
-
         echo "CC=clang" >> $GITHUB_ENV
         echo "LD=ld.lld" >> $GITHUB_ENV
-
-        echo "AR=llvm-ar" >> $GITHUB_ENV
-        echo "NM=llvm-nm" >> $GITHUB_ENV
-        echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
-        echo "OBJDUMP=llvm-objdump" >> $GITHUB_ENV
-        echo "STRIP=llvm-strip" >> $GITHUB_ENV
-
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
     - name: Load defconfig
       run: |
-        make O=out your_defconfig
+        make O=out violet_defconfig
+
+    - name: Disable compat vDSO (FIX PERMANENT)
+      run: |
+        scripts/config --file out/.config \
+          -d CONFIG_COMPAT_VDSO \
+          -d CONFIG_COMPAT
+        make O=out olddefconfig
 
     - name: Enable KernelSU configs
       run: |
@@ -73,29 +65,26 @@ jobs:
 
     - name: Build kernel
       run: |
-        make O=out -j$(nproc)
+        make -j$(nproc) O=out
 
-    # ===== AnyKernel3 =====
     - name: Prepare AnyKernel3
       run: |
-        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3 anykernel
-        cp out/arch/arm64/boot/Image.gz anykernel/
-        if [ -f out/arch/arm64/boot/dtbo.img ]; then
-          cp out/arch/arm64/boot/dtbo.img anykernel/
-        fi
+        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git AK3
+        cp out/arch/arm64/boot/Image.gz AK3/
+        cp out/arch/arm64/boot/dtbo.img AK3/
 
     - name: Create flashable zip
       run: |
-        cd anykernel
-        zip -r9 ../kernel.zip *
+        cd AK3
+        zip -r9 kernel.zip *
 
     - name: Sign zip
       run: |
-        wget https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-        java -jar zipsigner-3.0-dexed.jar kernel.zip kernel-signed.zip
+        curl -L -o zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner.jar AK3/kernel.zip kernel-signed.zip
 
-    - name: Upload zip
+    - name: Upload flashable zip
       uses: actions/upload-artifact@v4
       with:
-        name: KernelSU-Next-v1.1.1
-        path: kernel-signed.zip
+        name: Kernel-Violet-KSU
+        path: AK3/kernel-signed.zip
