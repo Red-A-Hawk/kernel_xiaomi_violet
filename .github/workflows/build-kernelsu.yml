@@ -1,0 +1,221 @@
+name: Build KernelSU Next (violet | sixteen)
+
+on:
+  push:
+    branches:
+      - sixteen
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    # 1️⃣ جلب سورس النواة
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+      with:
+        ref: sixteen
+        fetch-depth: 1
+
+    # 2️⃣ تثبيت المتطلبات
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git bc bison flex libssl-dev \
+          make zip unzip curl wget \
+          libelf-dev libncurses5-dev \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi \
+          python3 python3-pip
+
+    # 3️⃣ Cache لـ Proton Clang (لتسريع البناء)
+    - name: Cache Proton Clang
+      id: cache-clang
+      uses: actions/cache@v4
+      with:
+        path: clang
+        key: proton-clang-${{ runner.os }}
+
+    - name: Setup Proton Clang
+      if: steps.cache-clang.outputs.cache-hit != 'true'
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+
+    - name: Add Clang to PATH
+      run: echo "$PWD/clang/bin" >> $GITHUB_PATH
+
+    # 4️⃣ دمج KernelSU Next v1.1.1
+    - name: Setup KernelSU Next v1.1.1
+      run: |
+        git clone --depth=1 -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
+        bash KernelSU-Next/kernel/setup.sh
+
+    # 5️⃣ متغيرات البناء
+    - name: Export build environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+    # 6️⃣ تحميل defconfig
+    - name: Load defconfig
+      run: |
+        make O=out vendor/violet-perf_defconfig
+
+    # 7️⃣ تفعيل KernelSU configs مع SUSFS
+    - name: Enable KernelSU + SUSFS config
+      run: |
+        scripts/config --file out/.config \
+          -e CONFIG_KSU \
+          -e CONFIG_KSU_LSM_SECURITY_HOOKS \
+          -e CONFIG_KSU_MANUAL_HOOK \
+          -d CONFIG_KSU_DEBUG \
+          -e CONFIG_KSU_SUSFS \
+          -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
+          -e CONFIG_KSU_SUSFS_SUS_PATH \
+          -e CONFIG_KSU_SUSFS_SUS_MOUNT \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+          -e CONFIG_KSU_SUSFS_SUS_KSTAT \
+          -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+          -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
+          -e CONFIG_KSU_SUSFS_ENABLE_LOG \
+          -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+          -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
+          -d CONFIG_KPROBES \
+          -d CONFIG_KPROBE_EVENTS \
+          -e CONFIG_HAVE_KERNEL_XZ \
+          -e CONFIG_COMPAT_VDSO \
+          -d CONFIG_MODULE_SIG
+        make O=out olddefconfig
+
+    # 8️⃣ بناء النواة
+    - name: Build kernel
+      run: |
+        echo "🔨 Starting kernel build..."
+        make O=out -j$(nproc) 2>&1 | tee build.log
+        echo "✅ Build completed!"
+
+    # 9️⃣ التحقق من نجاح البناء
+    - name: Check build output
+      run: |
+        if [ ! -f out/arch/arm64/boot/Image.gz ]; then
+          echo "❌ Build failed! Image.gz not found"
+          exit 1
+        fi
+        echo "✅ Image.gz found ($(du -h out/arch/arm64/boot/Image.gz | cut -f1))"
+        
+        if [ ! -f out/arch/arm64/boot/dtbo.img ]; then
+          echo "❌ dtbo.img not found"
+          exit 1
+        fi
+        echo "✅ dtbo.img found ($(du -h out/arch/arm64/boot/dtbo.img | cut -f1))"
+
+    # 🔟 تحضير AnyKernel3
+    - name: Package with AnyKernel3
+      run: |
+        git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git
+        
+        # نسخ Image.gz
+        cp out/arch/arm64/boot/Image.gz AnyKernel3/
+        echo "✅ Image.gz copied"
+        
+        # نسخ dtbo.img
+        cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+        echo "✅ dtbo.img copied"
+        
+        # إضافة معلومات البناء
+        KERNEL_VERSION=$(make kernelversion)
+        BUILD_DATE=$(date +"%Y%m%d-%H%M")
+        
+        cd AnyKernel3
+        zip -r9 ../KernelSU-Next-Violet-${BUILD_DATE}-unsigned.zip * -x .git README.md .gitignore
+        echo "✅ Unsigned ZIP created"
+
+    # 1️⃣1️⃣ تحميل zipsigner-3.0-dexed
+    - name: Download zipsigner
+      run: |
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar -O zipsigner-3.0-dexed.jar
+        echo "✅ zipsigner-3.0-dexed.jar downloaded"
+
+    # 1️⃣2️⃣ توقيع الـ ZIP باستخدام zipsigner-3.0-dexed
+    - name: Sign ZIP with zipsigner
+      run: |
+        BUILD_DATE=$(date +"%Y%m%d-%H%M")
+        java -jar zipsigner-3.0-dexed.jar \
+          KernelSU-Next-Violet-${BUILD_DATE}-unsigned.zip \
+          KernelSU-Next-Violet-${BUILD_DATE}.zip
+        echo "✅ ZIP signed successfully with zipsigner-3.0-dexed"
+        
+        # حذف النسخة غير الموقعة
+        rm -f KernelSU-Next-Violet-${BUILD_DATE}-unsigned.zip
+        
+        # عرض حجم الملف النهائي
+        ls -lh KernelSU-Next-Violet-${BUILD_DATE}.zip
+
+    # 1️⃣3️⃣ رفع Build Log في حالة الفشل
+    - name: Upload build log
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: build.log
+
+    # 1️⃣4️⃣ رفع ZIP النهائي الموقّع
+    - name: Upload flashable ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: KernelSU-Next-Violet
+        path: KernelSU-Next-Violet-*.zip
+
+    # 1️⃣5️⃣ رفع Image.gz و dtbo.img منفصلين (اختياري)
+    - name: Upload kernel images
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Images
+        path: |
+          out/arch/arm64/boot/Image.gz
+          out/arch/arm64/boot/dtbo.img
+
+    # 1️⃣6️⃣ إنشاء Release تلقائي (اختياري - يمكن حذفه)
+    - name: Create Release
+      if: github.ref == 'refs/heads/sixteen'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: KernelSU-Next-${{ github.run_number }}
+        name: KernelSU Next Build #${{ github.run_number }}
+        body: |
+          🔥 **KernelSU Next Build for Xiaomi Violet**
+          
+          📱 Device: Redmi Note 7 Pro (violet)
+          🔧 KernelSU Version: v1.1.1 Next
+          📅 Build Date: ${{ github.event.head_commit.timestamp }}
+          🔨 Compiler: Proton Clang
+          
+          **Features:**
+          ✅ KernelSU Next v1.1.1
+          ✅ SUSFS Full Support
+          ✅ Manual Hooks (No Kprobes)
+          ✅ Signed with zipsigner-3.0-dexed
+          
+          **How to Flash:**
+          1. Boot to recovery (TWRP/OrangeFox)
+          2. Flash the ZIP file
+          3. Reboot
+          4. Install KernelSU Manager
+          
+          ⚠️ **Backup your data before flashing!**
+        files: KernelSU-Next-Violet-*.zip
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
