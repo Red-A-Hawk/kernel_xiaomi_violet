@@ -1,9 +1,7 @@
-name: Build Kernel (violet | Proton Clang | KernelSU Next | AnyKernel3)
+name: Build Kernel (violet | Proton Clang | KernelSU Next v1.1.1)
 
 on:
   push:
-    branches:
-      - sixteen
   workflow_dispatch:
 
 jobs:
@@ -14,87 +12,100 @@ jobs:
     - name: Checkout kernel source
       uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Setup dependencies
       run: |
         sudo apt update
-        sudo apt install -y \
-          git bc bison flex libssl-dev \
-          make curl zip unzip \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi \
-          binutils-aarch64-linux-gnu \
-          binutils-arm-linux-gnueabi \
-          python3
+        sudo apt install -y bc bison flex libssl-dev \
+        build-essential zip unzip git curl \
+        python3 python-is-python3 openjdk-11-jre
 
-    - name: Download Proton Clang
+    - name: Setup Proton Clang
       run: |
         git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+        echo "$(pwd)/clang/bin" >> $GITHUB_PATH
 
-    - name: Setup toolchain env
+    # ===============================
+    # KernelSU Next v1.1.1 (FIXED)
+    # ===============================
+    - name: Setup KernelSU Next v1.1.1
       run: |
-        echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
-        echo "CC=clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "LLVM=1" >> $GITHUB_ENV
-        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
+        cd KernelSU-Next
+        git checkout v1.1.1
+        cd ..
+        bash KernelSU-Next/kernel/setup.sh
 
-    # 1️⃣ KernelSU Next (official)
-    - name: Setup KernelSU Next
-      run: |
-        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh | bash
-
-    # 2️⃣ non-GKI patches (المهم)
+    # ===============================
+    # Apply non-GKI patches
+    # ===============================
     - name: Apply KernelSU non-GKI patches
       run: |
         git clone https://github.com/jonjeexe/KernelSU_Patches.git
-        mv KernelSU_Patches Patches
-        bash Patches/Patch.sh
+        cd KernelSU_Patches
+        bash Patch.sh
+        cd ..
 
+    # ===============================
+    # Load defconfig
+    # ===============================
     - name: Load defconfig
       run: |
+        export ARCH=arm64
+        export SUBARCH=arm64
         make O=out vendor/violet-perf_defconfig
 
+    # ===============================
+    # Enable KernelSU + SUSFS
+    # ===============================
     - name: Enable KernelSU + SUSFS
       run: |
         scripts/config --file out/.config \
           -e CONFIG_KSU \
-          -e CONFIG_KSU_MANUAL_HOOK \
-          -e CONFIG_SUSFS \
-          -e CONFIG_SUSFS_SUS_PATH \
-          -e CONFIG_SUSFS_SUS_MOUNT \
-          -e CONFIG_SUSFS_SUS_KSTAT \
-          -e CONFIG_SUSFS_SUS_MAPS
+          -e CONFIG_KSU_MANUAL_HOOK
         make O=out olddefconfig
 
+    # ===============================
+    # Build kernel
+    # ===============================
     - name: Build kernel
       run: |
-        make O=out -j$(nproc)
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export CC=clang
+        make -j$(nproc) O=out
 
-    # 3️⃣ AnyKernel3
+    # ===============================
+    # Prepare AnyKernel3
+    # ===============================
     - name: Prepare AnyKernel3
       run: |
-        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git AnyKernel3
+        git clone https://github.com/Joker-V2/AnyKernel3 -b sixteen
         cp out/arch/arm64/boot/Image.gz AnyKernel3/
         cp out/arch/arm64/boot/dtbo.img AnyKernel3/
 
+    # ===============================
+    # Create flashable zip
+    # ===============================
     - name: Create flashable zip
       run: |
         cd AnyKernel3
         zip -r9 ../kernel-violet.zip *
+        cd ..
 
-    # 4️⃣ Sign zip
+    # ===============================
+    # Sign zip
+    # ===============================
     - name: Sign zip
       run: |
         curl -L -o zipsigner.jar \
-          https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
         java -jar zipsigner.jar kernel-violet.zip kernel-violet-signed.zip
 
+    # ===============================
+    # Upload
+    # ===============================
     - name: Upload flashable zip
       uses: actions/upload-artifact@v4
       with:
-        name: KernelSU-Next-violet
+        name: kernel-violet-signed
         path: kernel-violet-signed.zip
