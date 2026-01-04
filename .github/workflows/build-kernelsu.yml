@@ -1,9 +1,8 @@
-name: KernelSU Next (KPROBES test)
+name: KernelSU Next v1.1.1 + SUSFS (jonjeexe) - violet
 
 on:
   push:
-    branches:
-      - sixteen
+    branches: [ sixteen ]
   workflow_dispatch:
 
 jobs:
@@ -11,33 +10,36 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    # 1️⃣ جلب سورس النواة
-    - name: Checkout kernel source
+    - name: Checkout kernel
       uses: actions/checkout@v4
       with:
         ref: sixteen
-        fetch-depth: 1
 
-    # 2️⃣ تثبيت الاعتمادات
-    - name: Install dependencies
+    - name: Install deps
       run: |
         sudo apt update
-        sudo apt install -y \
-          bc bison build-essential curl flex git \
-          libssl-dev libncurses5-dev lzop zip unzip \
-          wget python3 xz-utils libxml2-utils \
-          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+        sudo apt install -y git bc bison flex libssl-dev \
+        make zip unzip curl wget libelf-dev libncurses5-dev \
+        gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi python3
 
-    # 3️⃣ تثبيت Proton Clang
-    - name: Install Proton Clang
+    - name: Setup ZyCromerZ Clang
       run: |
-        mkdir -p $HOME/proton
-        wget -q https://github.com/kdrag0n/proton-clang-build/releases/download/20200117/proton_clang-11.0.0-20200117.tar.zst
-        tar -I zstd -xf proton_clang-11.0.0-20200117.tar.zst -C $HOME/proton --strip-components=1
-        echo "$HOME/proton/bin" >> $GITHUB_PATH
+        mkdir clang
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
+        echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    # 4️⃣ متغيرات البناء
-    - name: Export build env
+    - name: Setup KernelSU Next v1.1.1
+      run: |
+        git clone -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
+        bash KernelSU-Next/kernel/setup.sh
+
+    - name: Apply jonjeexe SUSFS patches
+      run: |
+        git clone -b non-GKI https://github.com/jonjeexe/KernelSU_Patches.git
+        bash KernelSU_Patches/Patch.sh
+
+    - name: Export env
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
@@ -48,80 +50,42 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # 5️⃣ تحميل defconfig
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
+        make O=out scripts
 
-    # 6️⃣ تفعيل KernelSU + KPROBES + SUSFS (اختبار)
-    - name: Apply KernelSU test config (KPROBES)
+    - name: Enable KernelSU + SUSFS
       run: |
         scripts/config --file out/.config \
           -e CONFIG_KSU \
           -e CONFIG_KSU_LSM_SECURITY_HOOKS \
           -e CONFIG_KPROBES \
-          -e CONFIG_HAVE_KPROBES \
-          -e CONFIG_KPROBE_EVENTS \
-          -d CONFIG_KSU_MANUAL_HOOK
-
-        scripts/config --file out/.config \
           -e CONFIG_KSU_SUSFS \
-          -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
           -e CONFIG_KSU_SUSFS_SUS_PATH \
           -e CONFIG_KSU_SUSFS_SUS_MOUNT \
-          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
           -e CONFIG_KSU_SUSFS_SUS_KSTAT \
-          -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
-          -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
           -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
-          -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-          -e CONFIG_KSU_SUSFS_ENABLE_LOG \
-          -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-
-        scripts/config --file out/.config \
-          -e CONFIG_COMPAT_VDSO
-
+          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT
         make O=out olddefconfig
 
-    # 7️⃣ بناء النواة
     - name: Build kernel
-      run: |
-        make O=out -j$(nproc) 2>&1 | tee build.log
+      run: make O=out -j$(nproc)
 
-    # 8️⃣ التحقق من المخرجات
-    - name: Check outputs
-      run: |
-        test -f out/arch/arm64/boot/Image.gz
-        test -f out/arch/arm64/boot/dtbo.img
-
-    # 9️⃣ تحضير AnyKernel3
     - name: Package AnyKernel3
       run: |
-        git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git
+        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git
         cp out/arch/arm64/boot/Image.gz AnyKernel3/
         cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-        cd AnyKernel3
-        zip -r9 ../kernel-test-unsigned.zip *
+        cd AnyKernel3 && zip -r9 ../kernel.zip *
 
-    # 🔟 تحميل zipsigner
-    - name: Download zipsigner
-      run: |
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-
-    # 1️⃣1️⃣ توقيع ZIP
     - name: Sign zip
       run: |
-        java -jar zipsigner-3.0-dexed.jar \
-          kernel-test-unsigned.zip \
-          kernel-test-signed.zip
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner-3.0-dexed.jar kernel.zip kernel-signed.zip
 
-    # 1️⃣2️⃣ رفع النتائج
-    - name: Upload artifacts
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: KernelSU-KPROBES-test
-        path: |
-          kernel-test-signed.zip
-          build.log
+        name: KernelSU-v1.1.1-SUSFS
+        path: kernel-signed.zip
