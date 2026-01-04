@@ -1,9 +1,6 @@
-name: Build Kernel Violet (Flashable)
+name: Build Kernel Violet
 
 on:
-  push:
-    branches:
-      - sixteen
   workflow_dispatch:
 
 jobs:
@@ -11,80 +8,68 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout source
+    - name: Checkout kernel source
       uses: actions/checkout@v4
 
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
-          git bc bison flex libssl-dev \
-          make gcc lld \
-          libc6-dev libncurses5-dev \
-          libncursesw5-dev \
-          python3 zip unzip \
-          openjdk-17-jdk
+          bc bison flex libssl-dev \
+          build-essential curl git zip unzip \
+          python3 ccache
 
-    # ===== Proton Clang =====
     - name: Clone Proton Clang
       run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton
-        echo "$GITHUB_WORKSPACE/proton/bin" >> $GITHUB_PATH
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
 
-    # ===== KernelSU Next v1.1.1 =====
-    - name: Apply KernelSU Next v1.1.1
+    - name: Set environment
       run: |
-        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
-        cd KernelSU-Next
-        git checkout v1.1.1
-        cd ..
-        bash KernelSU-Next/kernel/setup.sh
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "CC=$(pwd)/clang/bin/clang" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-androideabi-" >> $GITHUB_ENV
+        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "KBUILD_BUILD_USER=builder" >> $GITHUB_ENV
+        echo "KBUILD_BUILD_HOST=github" >> $GITHUB_ENV
 
-    # ===== Defconfig =====
     - name: Load defconfig
       run: |
-        make O=out vendor/violet-perf_defconfig
+        make O=out violet-perf_defconfig
 
-    # ===== Build Kernel =====
     - name: Build kernel
       run: |
         make -j$(nproc) O=out \
           CC=clang \
           LD=ld.lld \
-          KCFLAGS=-Wno-error
+          AR=llvm-ar \
+          NM=llvm-nm \
+          OBJCOPY=llvm-objcopy \
+          OBJDUMP=llvm-objdump \
+          STRIP=llvm-strip \
+          KBUILD_CFLAGS="-Wno-error"
 
-    # ===== AnyKernel3 =====
     - name: Clone AnyKernel3
       run: |
-        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git anykernel
+        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git AnyKernel3
 
-    - name: Copy kernel images
+    - name: Copy kernel image
       run: |
-        cp out/arch/arm64/boot/Image.gz anykernel/Image.gz || true
-        cp out/arch/arm64/boot/Image anykernel/Image || true
-        cp out/arch/arm64/boot/dtbo.img anykernel/dtbo.img || true
+        cp out/arch/arm64/boot/Image AnyKernel3/
 
-    - name: Pack AnyKernel3 zip
+    - name: Create flashable zip
       run: |
-        cd anykernel
-        zip -r9 ../kernel-violet-KSU-next-unsigned.zip ./*
-        cd ..
+        cd AnyKernel3
+        zip -r9 kernel-violet.zip *
 
-    # ===== ZipSigner =====
-    - name: Download zipsigner
+    - name: Sign zip
       run: |
-        wget -O zipsigner.jar \
-        https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        wget -O zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner.jar kernel-violet.zip kernel-violet-signed.zip
 
-    - name: Sign flashable zip
-      run: |
-        java -jar zipsigner.jar \
-          kernel-violet-KSU-next-unsigned.zip \
-          kernel-violet-KSU-next.zip
-
-    # ===== Upload =====
-    - name: Upload flashable kernel
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Violet-Kernel-KSU-Next
-        path: kernel-violet-KSU-next.zip
+        name: Violet-Kernel
+        path: AnyKernel3/kernel-violet-signed.zip
