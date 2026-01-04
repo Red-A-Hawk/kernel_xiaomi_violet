@@ -7,26 +7,25 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  build_kernel:
+    runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout source
+    - name: Checkout Kernel Source
       uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Install Dependencies
       run: |
-        sudo apt update
-        sudo apt install -y \
-          bc bison flex libssl-dev make \
-          git ccache curl zip unzip \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi
+        sudo apt-get update
+        sudo apt-get install -y \
+          clang make gcc git bc libncurses-dev \
+          libssl-dev libelf-dev flex bison zip unzip \
+          openjdk-17-jdk python3 ccache
 
-    - name: Setup Proton Clang
+    - name: Set up Proton Clang Toolchain
       run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
-        echo "PATH=$GITHUB_WORKSPACE/clang/bin:$PATH" >> $GITHUB_ENV
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton
+        echo "PATH=$GITHUB_WORKSPACE/proton/bin:$PATH" >> $GITHUB_ENV
         echo "CC=clang" >> $GITHUB_ENV
         echo "LD=ld.lld" >> $GITHUB_ENV
         echo "ARCH=arm64" >> $GITHUB_ENV
@@ -36,40 +35,51 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    - name: Apply KernelSU Next v1.1.1
+    - name: Clone and Checkout KernelSU Next v1.1.1
       run: |
-        git clone https://github.com/KernelSU-Next/KernelSU-Next.git ksu
-        cd ksu
+        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
+        cd KernelSU-Next
         git checkout v1.1.1
         cd ..
-        bash ksu/kernel/setup.sh
+        bash KernelSU-Next/kernel/setup.sh
 
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
 
-    - name: Build kernel
+    - name: Build the Kernel
       run: |
-        make O=out -j$(nproc)
+        make O=out -j$(nproc) \
+          CC=clang \
+          LD=ld.lld \
+          KCFLAGS="-Wno-error"
 
-    - name: Prepare AnyKernel3
+    - name: Clone AnyKernel3 (sixteen)
       run: |
-        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3 ak3
-        cp out/arch/arm64/boot/Image.gz ak3/
-        cp out/arch/arm64/boot/dtbo.img ak3/ || true
+        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git AnyKernel3
 
-    - name: Zip kernel
+    - name: Copy Kernel Image
       run: |
-        cd ak3
-        zip -r ../kernel-unsigned.zip *
+        cp out/arch/arm64/boot/Image.gz AnyKernel3/
+        cp out/arch/arm64/boot/Image AnyKernel3/
+        cp out/arch/arm64/boot/dtbo.img AnyKernel3/ || true
 
-    - name: Sign zip
+    - name: Create Flashable ZIP
+      run: |
+        cd AnyKernel3
+        zip -r9 ../kernel-violet-KSU-next-unsigned.zip *
+        cd ..
+
+    - name: Download zipsigner
       run: |
         wget -O zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-        java -jar zipsigner.jar kernel-unsigned.zip kernel-signed.zip
 
-    - name: Upload flashable zip
+    - name: Sign ZIP
+      run: |
+        java -jar zipsigner.jar kernel-violet-KSU-next-unsigned.zip kernel-violet-KSU-next.zip
+
+    - name: Upload Flashable Kernel
       uses: actions/upload-artifact@v4
       with:
         name: Flashable-Kernel
-        path: kernel-signed.zip
+        path: kernel-violet-KSU-next.zip
