@@ -13,7 +13,10 @@ jobs:
     steps:
       # Step 1: Checkout the repository
       - name: Checkout KernelSU Next v1.1.1
-        run: git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git
+        run: |
+          git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git
+          cd kernel_xiaomi_violet
+          git checkout v1.1.1
 
       # Step 2: Install required dependencies
       - name: Install required dependencies
@@ -22,11 +25,11 @@ jobs:
           sudo apt-get install -y bc bison build-essential curl flex \
           git libssl-dev libncurses5-dev lzop zip wget python3 \
           xz-utils libxml2-utils
+          echo "Required dependencies installed"
 
-      # Step 3: Install Clang and Proton Clang Toolchain
-      - name: Install Clang and Proton Clang Toolchain
+      # Step 3: Install Proton Clang Toolchain
+      - name: Install Proton Clang Toolchain
         run: |
-          sudo apt-get install -y clang llvm lld
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
           echo "PATH=$GITHUB_WORKSPACE/proton-clang/bin:$PATH" >> $GITHUB_ENV
           echo "CC=clang" >> $GITHUB_ENV
@@ -39,18 +42,17 @@ jobs:
           echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
           echo "Proton Clang toolchain installed"
 
-      # Step 4: Load Custom defconfig and Load Kernel Config
+      # Step 4: Apply Custom defconfig and Load Kernel Config
       - name: Apply Custom defconfig and Load Kernel Config
         run: |
-          echo "🔧 Loading Custom Defconfig"
           cp vendor/violet-perf_defconfig .config
+          make O=out vendor/violet-perf_defconfig
           echo "✅ Defconfig Loaded"
 
-      # Step 5: Build the kernel
+      # Step 5: Build the kernel with Proton Clang
       - name: Build Kernel
         run: |
-          echo "🚀 Building Kernel with Proton Clang"
-          make -j$(nproc) O=out ARCH=arm64
+          make O=out -j$(nproc) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld
 
       # Step 6: Clone AnyKernel3 (sixteen)
       - name: Clone AnyKernel3 (sixteen)
@@ -59,13 +61,11 @@ jobs:
       # Step 7: Copy Kernel Image
       - name: Copy Kernel Image
         run: |
-          echo "🔄 Copying Kernel Image"
           cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
 
       # Step 8: Create Flashable ZIP
       - name: Create Flashable ZIP
         run: |
-          echo "📦 Creating Flashable ZIP"
           cd AnyKernel3
           zip -r9 ../flashable_kernel.zip *
 
@@ -73,13 +73,11 @@ jobs:
       - name: Download zipsigner
         run: |
           wget https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-          echo "📥 zipsigner Downloaded"
-      
+
       # Step 10: Sign the ZIP
       - name: Sign the ZIP
         run: |
           java -jar zipsigner-3.0-dexed.jar flashable_kernel.zip flashable_kernel_signed.zip
-          echo "🔏 Kernel ZIP Signed"
 
       # Step 11: Upload final build
       - name: Upload final build
