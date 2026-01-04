@@ -50,43 +50,39 @@ jobs:
       run: echo "$PWD/clang/bin" >> $GITHUB_PATH
 
     # 4️⃣ دمج KernelSU Next مع SUSFS
-    - name: Setup KernelSU Next with SUSFS support
+    - name: Setup KernelSU with SUSFS support
       run: |
-        # استخدام repo sidex15 الذي يحتوي على SUSFS
-        git clone --depth=1 https://github.com/sidex15/KernelSU-Next.git KSU-SUSFS
+        # استخدام KernelSU الرسمي من tiann (يحتوي على SUSFS)
+        git clone --depth=1 https://github.com/tiann/KernelSU.git KSU-SUSFS
         
         # عرض جميع SUSFS configs المتاحة
-        echo "🔍 Available SUSFS configs:"
+        echo "🔍 Searching for SUSFS configs..."
         grep -r "config KSU_SUSFS" KSU-SUSFS/kernel/ 2>/dev/null | grep -o "config KSU_SUSFS[A-Z_]*" | sort -u || true
         
         # التحقق من وجود SUSFS
         if grep -rq "CONFIG_KSU_SUSFS" KSU-SUSFS/kernel/ 2>/dev/null; then
-          echo "✅ SUSFS support confirmed!"
+          echo "✅ SUSFS support confirmed in tiann/KernelSU!"
         else
-          echo "❌ SUSFS not found! Trying alternative repo..."
-          rm -rf KSU-SUSFS
+          echo "⚠️ SUSFS configs not found in Kconfig files"
+          echo "Checking if SUSFS is included in the source code..."
           
-          # محاولة repo بديل
-          git clone --depth=1 https://github.com/tiann/KernelSU.git KSU-SUSFS
-          
-          if grep -rq "CONFIG_KSU_SUSFS" KSU-SUSFS/kernel/ 2>/dev/null; then
-            echo "✅ SUSFS found in alternative repo!"
+          # البحث عن SUSFS في الكود المصدري
+          if find KSU-SUSFS -name "*susfs*" -o -name "*SUSFS*" | grep -q .; then
+            echo "✅ SUSFS code files found!"
           else
-            echo "⚠️ SUSFS not available, continuing with standard KernelSU..."
+            echo "⚠️ SUSFS may not be fully available in this version"
+            echo "Continuing anyway - basic KernelSU will work"
           fi
         fi
         
         # دمج KernelSU
+        echo "🔧 Integrating KernelSU..."
         bash KSU-SUSFS/kernel/setup.sh
         
         # التحقق من نجاح الدمج
         if [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ]; then
           echo "✅ KernelSU integrated successfully"
-          
-          # عرض معلومات النسخة
-          if [ -f "KernelSU/kernel/Kconfig" ]; then
-            echo "📋 KernelSU directory structure verified"
-          fi
+          ls -la KernelSU/ 2>/dev/null || ls -la drivers/kernelsu/ 2>/dev/null || true
         else
           echo "❌ KernelSU integration failed"
           exit 1
@@ -112,44 +108,52 @@ jobs:
     # 7️⃣ تفعيل KernelSU configs مع SUSFS (كل الميزات)
     - name: Enable KernelSU + SUSFS config
       run: |
-        # تفعيل KernelSU الأساسي
+        # تفعيل KernelSU الأساسي (بدون تحديد نوع الـ hook)
         scripts/config --file out/.config \
           -e CONFIG_KSU \
-          -e CONFIG_KSU_LSM_SECURITY_HOOKS \
-          -e CONFIG_KSU_MANUAL_HOOK \
           -d CONFIG_KSU_DEBUG
         
+        # محاولة تفعيل كلا الطريقتين والنظام سيختار المتاح
+        scripts/config --file out/.config \
+          -e CONFIG_KPROBES \
+          -e CONFIG_HAVE_KPROBES \
+          -e CONFIG_KPROBE_EVENTS
+        
+        # تطبيق التغييرات الأولية
+        make O=out olddefconfig
+        
+        # الآن تحقق من النتيجة وفعّل المناسب
+        if grep -q "CONFIG_KPROBES=y" out/.config; then
+          echo "✅ Kprobes available - using Kprobes method"
+        else
+          echo "⚠️ Kprobes not available - trying Manual Hooks"
+          scripts/config --file out/.config \
+            -e CONFIG_KSU_MANUAL_HOOK \
+            -d CONFIG_KPROBES \
+            -d CONFIG_KPROBE_EVENTS
+        fi
+        
+        # تفعيل LSM hooks
+        scripts/config --file out/.config \
+          -e CONFIG_KSU_LSM_SECURITY_HOOKS
+        
         # تفعيل SUSFS - الميزات الأساسية
+        echo "🔧 Enabling SUSFS configs..."
         scripts/config --file out/.config \
           -e CONFIG_KSU_SUSFS \
-          -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
-        
-        # SUSFS - إخفاء المسارات والـ Mounts
-        scripts/config --file out/.config \
+          -e CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
           -e CONFIG_KSU_SUSFS_SUS_PATH \
           -e CONFIG_KSU_SUSFS_SUS_MOUNT \
           -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
-        
-        # SUSFS - Kernel Stats و Try Umount
-        scripts/config --file out/.config \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
           -e CONFIG_KSU_SUSFS_SUS_KSTAT \
           -e CONFIG_KSU_SUSFS_TRY_UMOUNT \
-          -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT
-        
-        # SUSFS - Spoofing Features
-        scripts/config --file out/.config \
+          -e CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
           -e CONFIG_KSU_SUSFS_SPOOF_UNAME \
-          -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-        
-        # SUSFS - إخفاء وحماية متقدمة
-        scripts/config --file out/.config \
+          -e CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
           -e CONFIG_KSU_SUSFS_ENABLE_LOG \
           -e CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT
-        
-        # SUSFS - ميزات إضافية (قد لا تكون متوفرة في كل النسخ)
-        scripts/config --file out/.config \
+          -e CONFIG_KSU_SUSFS_OPEN_REDIRECT \
           -e CONFIG_KSU_SUSFS_SUS_SU \
           -e CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
           -e CONFIG_KSU_SUSFS_ALLOW_SU_TO_OTHER_TASK \
@@ -158,50 +162,51 @@ jobs:
           -e CONFIG_KSU_SUSFS_SUS_KPROBE \
           -e CONFIG_KSU_SUSFS_SPOOF_SELINUX_HOOKS
         
-        # إعدادات Kernel - Manual Hooks (معطّلة KPROBES)
+        # إعدادات Kernel إضافية
         scripts/config --file out/.config \
-          -d CONFIG_KPROBES \
-          -d CONFIG_KPROBE_EVENTS \
           -e CONFIG_HAVE_KERNEL_XZ \
           -e CONFIG_COMPAT_VDSO \
-          -d CONFIG_MODULE_SIG
+          -d CONFIG_MODULE_SIG \
+          -d CONFIG_MODULE_SIG_FORCE
         
-        # تطبيق التغييرات
+        # تطبيق التغييرات النهائية
         make O=out olddefconfig
         
-        # التحقق من تفعيل SUSFS وعدم التعارض
-        echo "🔍 Verifying SUSFS configs..."
-        if grep -q "CONFIG_KSU_SUSFS=y" out/.config; then
-          echo "✅ CONFIG_KSU_SUSFS is enabled"
-          
-          # عد الـ configs المفعلة
-          SUSFS_COUNT=$(grep "CONFIG_KSU_SUSFS.*=y" out/.config | wc -l)
-          echo "📊 Total SUSFS configs enabled: $SUSFS_COUNT"
-          
-          # عرض القائمة الكاملة
-          echo "📋 Enabled SUSFS configs:"
-          grep "CONFIG_KSU_SUSFS.*=y" out/.config | sed 's/=y//' || true
+        # التحقق النهائي
+        echo ""
+        echo "================================================"
+        echo "🔍 Final Configuration Check:"
+        echo "================================================"
+        
+        # التحقق من KernelSU
+        if grep -q "CONFIG_KSU=y" out/.config; then
+          echo "✅ CONFIG_KSU is enabled"
         else
-          echo "⚠️ CONFIG_KSU_SUSFS is NOT enabled - SUSFS may not be available"
-          echo "Continuing build anyway..."
+          echo "❌ CONFIG_KSU is NOT enabled"
+          exit 1
         fi
         
-        # التحقق من عدم التعارض
-        echo "🔍 Verifying hook configuration..."
+        # التحقق من Hook Method
         if grep -q "CONFIG_KSU_MANUAL_HOOK=y" out/.config; then
           echo "✅ Using Manual Hooks"
-          if grep -q "CONFIG_KPROBES=y" out/.config; then
-            echo "⚠️ WARNING: KPROBES is enabled with Manual Hooks - This may cause issues!"
-          else
-            echo "✅ KPROBES correctly disabled"
-          fi
+        elif grep -q "CONFIG_KPROBES=y" out/.config; then
+          echo "✅ Using Kprobes"
         else
-          if grep -q "CONFIG_KPROBES=y" out/.config; then
-            echo "✅ Using Kprobes method"
-          else
-            echo "⚠️ WARNING: Neither Manual Hooks nor Kprobes are enabled!"
-          fi
+          echo "⚠️ No hook method detected - this might cause issues"
         fi
+        
+        # التحقق من SUSFS
+        SUSFS_COUNT=$(grep -c "CONFIG_KSU_SUSFS.*=y" out/.config || echo "0")
+        if [ "$SUSFS_COUNT" -gt "0" ]; then
+          echo "✅ SUSFS enabled with $SUSFS_COUNT features"
+          echo "📋 Enabled SUSFS features:"
+          grep "CONFIG_KSU_SUSFS.*=y" out/.config | sed 's/=y//' | sed 's/CONFIG_/  - /'
+        else
+          echo "⚠️ No SUSFS features enabled - SUSFS not available in this KernelSU version"
+          echo "Continuing with basic KernelSU..."
+        fi
+        
+        echo "================================================"
 
     # 8️⃣ بناء النواة
     - name: Build kernel
