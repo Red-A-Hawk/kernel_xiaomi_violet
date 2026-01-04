@@ -30,18 +30,21 @@ jobs:
           gcc-arm-linux-gnueabi \
           python3 python3-pip
 
-    # 3️⃣ Cache لـ Proton Clang (لتسريع البناء)
-    - name: Cache Proton Clang
+    # 3️⃣ Cache لـ ZyCromerZ Clang (لتسريع البناء)
+    - name: Cache ZyCromerZ Clang
       id: cache-clang
       uses: actions/cache@v4
       with:
         path: clang
-        key: proton-clang-${{ runner.os }}
+        key: zyc-clang-15.0.7-20251111
 
-    - name: Setup Proton Clang
+    - name: Setup ZyCromerZ Clang 15.0.7
       if: steps.cache-clang.outputs.cache-hit != 'true'
       run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+        mkdir clang
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
+        rm -f Clang-15.0.7-20251111.tar.gz
 
     - name: Add Clang to PATH
       run: echo "$PWD/clang/bin" >> $GITHUB_PATH
@@ -199,7 +202,7 @@ jobs:
           📱 Device: Redmi Note 7 Pro (violet)
           🔧 KernelSU Version: v1.1.1 Next
           📅 Build Date: ${{ github.event.head_commit.timestamp }}
-          🔨 Compiler: Proton Clang
+          🔨 Compiler: ZyCromerZ Clang 15.0.7
           
           **Features:**
           ✅ KernelSU Next v1.1.1
