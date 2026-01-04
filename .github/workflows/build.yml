@@ -3,7 +3,7 @@ name: Kernel Build Script with Dependencies
 on:
   push:
     branches:
-      - sixteen  # التأكد من الفرع "sixteen" في حالة الدفع
+      - sixteen  # التأكد من أن الفروع تعمل مع "sixteen"
   workflow_dispatch:
 
 jobs:
@@ -14,16 +14,10 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v2
 
-    - name: Check branch
-      run: |
-        echo "Workflow is running on branch:"
-        echo "$GITHUB_REF"
-        echo "If you see this, Actions WORK ✅"
-
     - name: Ensure 'sixteen' branch exists
       run: |
         git fetch origin
-        git checkout sixteen || git checkout -b sixteen  # التأكد من الفرع sixteen موجود
+        git checkout sixteen || git checkout -b sixteen  # التأكد من وجود الفرع sixteen
 
     - name: Set up Python 3.8
       uses: actions/setup-python@v2
@@ -34,48 +28,20 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential \
-          gcc \
-          g++ \
-          make \
-          binutils \
-          libc6-dev \
-          libncurses5-dev \
-          libssl-dev \
-          bc \
-          bison \
-          flex \
-          libelf-dev \
-          libssl-dev \
-          zlib1g-dev \
-          libxml2-utils \
-          clang \
-          lld \
-          llvm \
-          git \
-          libtool \
-          liblz4-tool \
-          libgmp-dev \
-          libmpc-dev \
-          autoconf \
-          python3 \
-          python3-pip \
-          python3-venv \
-          rsync \
-          libreadline-dev \
-          libcurl4-openssl-dev \
-          libc6-i386 \
-          lib32stdc++6 \
           lib32gcc1 \
           lib32ncurses5 \
-          lib32z1 \
-          zipsigner \
+          python3.8 \
+          openjdk-11-jdk  # تثبيت Java
+
+    - name: Install ARM Cross-Compiling Tools
+      run: |
+        sudo apt-get install -y \
           gcc-arm-linux-gnueabi \
           g++-arm-linux-gnueabi
 
     - name: Install Clang (if needed)
       run: |
-        sudo apt-get install -y clang
+        sudo apt-get install -y clang llvm lld
 
     - name: Install Proton Clang Toolchain
       run: |
@@ -95,11 +61,10 @@ jobs:
         pip3 install --upgrade setuptools
         pip3 install --upgrade cmake
 
-    - name: Install ARM Cross-Compiling Tools
+    - name: Install Python dependencies for building kernel
       run: |
-        sudo apt-get install -y \
-          gcc-aarch64-linux-gnu \
-          g++-aarch64-linux-gnu
+        pip3 install --upgrade setuptools
+        pip3 install --upgrade cmake
 
     - name: Checkout KernelSU Next v1.1.1
       run: |
@@ -112,6 +77,19 @@ jobs:
     - name: Apply Custom defconfig and Load Kernel Config
       run: |
         cp /path/to/vendor/violet-perf_defconfig .config
+        # التعديلات على defconfig
+        sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/' .config
+        sed -i 's/# CONFIG_KSU_DEBUG is not set/CONFIG_KSU_DEBUG=n/' .config
+        sed -i 's/# CONFIG_KSU_MANUAL_HOOK is not set/CONFIG_KSU_MANUAL_HOOK=y/' .config
+        sed -i 's/# CONFIG_KSU_SUSFS is not set/CONFIG_KSU_SUSFS=y/' .config
+        sed -i 's/# CONFIG_KSU_SUSFS_SUS_PATH is not set/CONFIG_KSU_SUSFS_SUS_PATH=y/' .config
+        sed -i 's/# CONFIG_KSU_SUSFS_SUS_MOUNT is not set/CONFIG_KSU_SUSFS_SUS_MOUNT=y/' .config
+        sed -i 's/# CONFIG_KSU_SUSFS_SUS_KSTAT is not set/CONFIG_KSU_SUSFS_SUS_KSTAT=y/' .config
+        sed -i 's/# CONFIG_KSU_SUSFS_SPOOF_UNAME is not set/CONFIG_KSU_SUSFS_SPOOF_UNAME=y/' .config
+        sed -i 's/# CONFIG_KPROBES is not set/CONFIG_KPROBES=n/' .config
+        sed -i 's/# CONFIG_KPROBE_EVENTS is not set/CONFIG_KPROBE_EVENTS=n/' .config
+
+        # تحميل إعدادات defconfig
         make O=out ARCH=arm64 vendor/violet-perf_defconfig
         make O=out ARCH=arm64
 
