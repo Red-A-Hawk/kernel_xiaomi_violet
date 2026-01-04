@@ -1,6 +1,9 @@
-name: Build Kernel Violet (KernelSU Next + Proton)
+name: Build Kernel Violet (Flashable)
 
 on:
+  push:
+    branches:
+      - sixteen
   workflow_dispatch:
 
 jobs:
@@ -8,12 +11,10 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout kernel source
+    - name: Checkout source
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
 
-    - name: Setup build environment
+    - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
@@ -21,76 +22,47 @@ jobs:
           make gcc lld \
           libc6-dev libncurses5-dev \
           libncursesw5-dev \
-          python3 python-is-python3 \
-          zip unzip openjdk-17-jdk
+          python3 zip unzip \
+          openjdk-17-jdk
 
-    # =========================
-    # Proton Clang
-    # =========================
+    # ===== Proton Clang =====
     - name: Clone Proton Clang
       run: |
         git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton
-        echo "PROTON_DIR=$GITHUB_WORKSPACE/proton" >> $GITHUB_ENV
         echo "$GITHUB_WORKSPACE/proton/bin" >> $GITHUB_PATH
 
-    # =========================
-    # KernelSU Next v1.1.1
-    # =========================
+    # ===== KernelSU Next v1.1.1 =====
     - name: Apply KernelSU Next v1.1.1
       run: |
-        rm -rf KernelSU-Next
         git clone https://github.com/KernelSU-Next/KernelSU-Next.git
         cd KernelSU-Next
         git checkout v1.1.1
         cd ..
         bash KernelSU-Next/kernel/setup.sh
 
-    - name: Export build variables
-      run: |
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "WERROR=0" >> $GITHUB_ENV
-
-    # =========================
-    # Defconfig
-    # =========================
+    # ===== Defconfig =====
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
 
-    # =========================
-    # Build kernel (Proton)
-    # =========================
+    # ===== Build Kernel =====
     - name: Build kernel
       run: |
         make -j$(nproc) O=out \
           CC=clang \
           LD=ld.lld \
-          AR=llvm-ar \
-          AS=llvm-as \
-          NM=llvm-nm \
-          OBJCOPY=llvm-objcopy \
-          OBJDUMP=llvm-objdump \
-          STRIP=llvm-strip \
-          HOSTCC=clang \
-          HOSTCXX=clang++ \
-          KCFLAGS="-Wno-error"
+          KCFLAGS=-Wno-error
 
-    # =========================
-    # AnyKernel3
-    # =========================
-    - name: Clone AnyKernel3 (Android 16)
+    # ===== AnyKernel3 =====
+    - name: Clone AnyKernel3
       run: |
         git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git anykernel
 
-    - name: Copy kernel image
+    - name: Copy kernel images
       run: |
-        IMAGE=$(find out/arch/arm64/boot -name "Image*" | head -n 1)
-        if [ -z "$IMAGE" ]; then
-          echo "❌ Kernel Image not found"
-          exit 1
-        fi
-        cp "$IMAGE" anykernel/Image
+        cp out/arch/arm64/boot/Image.gz anykernel/Image.gz || true
+        cp out/arch/arm64/boot/Image anykernel/Image || true
+        cp out/arch/arm64/boot/dtbo.img anykernel/dtbo.img || true
 
     - name: Pack AnyKernel3 zip
       run: |
@@ -98,9 +70,7 @@ jobs:
         zip -r9 ../kernel-violet-KSU-next-unsigned.zip ./*
         cd ..
 
-    # =========================
-    # ZipSigner
-    # =========================
+    # ===== ZipSigner =====
     - name: Download zipsigner
       run: |
         wget -O zipsigner.jar \
@@ -112,8 +82,9 @@ jobs:
           kernel-violet-KSU-next-unsigned.zip \
           kernel-violet-KSU-next.zip
 
+    # ===== Upload =====
     - name: Upload flashable kernel
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-Violet-KSU-Next
+        name: Violet-Kernel-KSU-Next
         path: kernel-violet-KSU-next.zip
