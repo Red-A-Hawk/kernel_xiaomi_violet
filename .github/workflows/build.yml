@@ -11,96 +11,79 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Check out the repository
-      - name: Checkout KernelSU Next v1.1.1
-        run: git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git
-
-      # Set up Python 3.8
+      # Step 1: Set up Python 3.8
       - name: Set up Python 3.8
-        run: sudo apt-get update && sudo apt-get install -y python3.8 python3-pip python3-setuptools
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.8'
 
-      # Install required dependencies
+      # Step 2: Install required dependencies
       - name: Install required dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential curl flex \
           git libssl-dev libncurses5-dev lzop zip wget python3 \
           xz-utils libxml2-utils
-          echo "Required dependencies installed"
 
-      # Install Clang and Proton Clang Toolchain
-      - name: Install Clang and Proton Clang Toolchain
+      # Step 3: Install Clang if needed
+      - name: Install Clang (if needed)
         run: |
-          sudo apt-get install -y clang llvm lld
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git ~/proton-clang
-          echo "PATH=$GITHUB_WORKSPACE/proton-clang/bin:$PATH" >> $GITHUB_ENV
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "LD=ld.lld" >> $GITHUB_ENV
-          echo "ARCH=arm64" >> $GITHUB_ENV
-          echo "SUBARCH=arm64" >> $GITHUB_ENV
-          echo "LLVM=1" >> $GITHUB_ENV
-          echo "LLVM_IAS=1" >> $GITHUB_ENV
-          echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-          echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
-          echo "Proton Clang toolchain installed"
+          sudo apt-get install -y clang
 
-      # Install Python dependencies for kernel building
+      # Step 4: Install Proton Clang Toolchain
+      - name: Install Proton Clang Toolchain
+        run: |
+          sudo apt-get install -y clang-11 lld-11
+
+      # Step 5: Install Python dependencies for kernel building
       - name: Install Python dependencies for kernel building
         run: |
-          python3 -m pip install --upgrade pip
-          pip install setuptools
+          pip install -r requirements.txt
 
-      # Install ARM Cross-Compiling Tools
+      # Step 6: Install ARM Cross-Compiling Tools
       - name: Install ARM Cross-Compiling Tools
         run: |
-          sudo apt-get install -y gcc-arm-linux-gnueabi gcc-arm-linux-gnueabihf
-          echo "ARM Cross-Compiling Tools installed"
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      # Apply Custom defconfig and Load Kernel Config
-      - name: Load Custom defconfig
+      # Step 7: Checkout KernelSU Next v1.1.1
+      - name: Checkout KernelSU Next v1.1.1
+        run: git clone https://github.com/KernelSU/KernelSU.git && cd KernelSU && git checkout v1.1.1
+
+      # Step 8: Apply Custom defconfig and Load Kernel Config
+      - name: Apply Custom defconfig and Load Kernel Config
         run: |
-          echo "🔧 Loading Custom Defconfig"
-          cp vendor/violet-perf_defconfig .config
-          echo "✅ Defconfig Loaded"
+          cp /path/to/vendor/violet-perf_defconfig .config
+          make O=out vendor/violet-perf_defconfig
 
-      # Build the kernel
+      # Step 9: Build Kernel
       - name: Build Kernel
         run: |
-          echo "🚀 Building Kernel with Proton Clang"
-          make -j$(nproc) O=out ARCH=arm64
+          make -j$(nproc) O=out
 
-      # Clone AnyKernel3 (sixteen)
+      # Step 10: Clone AnyKernel3 (sixteen)
       - name: Clone AnyKernel3 (sixteen)
-        run: git clone --single-branch --branch sixteen https://github.com/Joker-V2/AnyKernel3.git
+        run: git clone --branch sixteen https://github.com/Red-A-Hawk/AnyKernel3.git
 
-      # Copy Kernel Image
+      # Step 11: Copy Kernel Image
       - name: Copy Kernel Image
         run: |
-          echo "🔄 Copying Kernel Image"
           cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
 
-      # Create Flashable ZIP
+      # Step 12: Create Flashable ZIP
       - name: Create Flashable ZIP
         run: |
-          echo "📦 Creating Flashable ZIP"
           cd AnyKernel3
-          zip -r9 ../flashable_kernel.zip *
+          zip -r9 ../kernel.zip *
 
-      # Download zipsigner
+      # Step 13: Download zipsigner
       - name: Download zipsigner
         run: |
           wget https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-          echo "📥 zipsigner Downloaded"
-      
-      # Sign the zip
-      - name: Sign the ZIP
-        run: |
-          java -jar zipsigner-3.0-dexed.jar flashable_kernel.zip flashable_kernel_signed.zip
-          echo "🔏 Kernel ZIP Signed"
+          java -jar zipsigner-3.0-dexed.jar kernel.zip signed_kernel.zip
 
-      # Upload final build
-      - name: Upload final build
-        uses: actions/upload-artifact@v3
+      # Step 14: Upload build artifact
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: flashable_kernel
-          path: flashable_kernel_signed.zip
+          name: kernel-artifacts
+          path: ./kernel.zip
