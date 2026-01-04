@@ -11,12 +11,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # تحقق من المستودع والتأكد من أنه موجود
+      # 1. تحقق من المستودع والتأكد من أنه موجود
       - name: Check if repository exists
         run: |
           git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git || exit 1
 
-      # تثبيت الاعتمادات المطلوبة بعد التأكد من المستودع
+      # 2. تثبيت الاعتمادات المطلوبة بعد التأكد من المستودع
       - name: Install required dependencies
         run: |
           sudo apt-get update
@@ -24,70 +24,73 @@ jobs:
           git libssl-dev libncurses5-dev lzop zip wget python3 \
           xz-utils libxml2-utils
 
-      # تثبيت Python 3.8 و pip
+      # 3. تثبيت Python 3.8 و pip
       - name: Set up Python 3.8
         run: sudo apt-get install python3.8 python3-pip
 
-      # تثبيت Proton Clang Toolchain من GitHub Releases
-      - name: Download Proton Clang
+      # 4. تثبيت Proton Clang Toolchain
+      - name: Install Proton Clang Toolchain
         run: |
           wget https://github.com/kdrag0n/proton-clang-build/releases/download/20200117/proton_clang-11.0.0-20200117.tar.zst
-          tar -I zstd -xf proton_clang-11.0.0-20200117.tar.zst
-          mv proton_clang-11.0.0-20200117 proton-clang
+          tar -xf proton_clang-11.0.0-20200117.tar.zst
+          export PATH=$PWD/proton_clang-11.0.0-20200117/bin:$PATH
+          export CROSS_COMPILE=$PWD/proton_clang-11.0.0-20200117/bin/aarch64-linux-gnu-
+          export ARCH=arm64
 
-      # إعداد بيئة Proton Clang
-      - name: Set Proton Clang Environment
-        run: |
-          echo "PATH=$GITHUB_WORKSPACE/proton-clang/bin:$PATH" >> $GITHUB_ENV
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "LD=ld.lld" >> $GITHUB_ENV
-          echo "AR=llvm-ar" >> $GITHUB_ENV
-          echo "NM=llvm-nm" >> $GITHUB_ENV
-          echo "STRIP=llvm-strip" >> $GITHUB_ENV
-          echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
-
-      # تثبيت KernelSU Next v1.1.1 بعد تثبيت Python
+      # 5. تحميل وتثبيت KernelSU Next v1.1.1 بعد تثبيت الأدوات
       - name: Checkout KernelSU Next v1.1.1
         run: |
+          cd kernel_xiaomi_violet
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
 
-      # تطبيق إعدادات defconfig و تحميل الإعدادات
+      # 6. تطبيق إعدادات defconfig و تحميل الإعدادات
       - name: Apply Custom defconfig and Load Kernel Config
         run: |
+          cd kernel_xiaomi_violet
           cp /path/to/vendor/violet-perf_defconfig .config
           make olddefconfig
 
-      # بناء النواة
-      - name: Build Kernel
-        run: make -j$(nproc) O=out
+      # 7. بناء النواة باستخدام Proton Clang
+      - name: Build Kernel with Proton Clang
+        run: |
+          cd kernel_xiaomi_violet
+          make -j$(nproc) O=out
 
-      # استنساخ AnyKernel3 (sixteen)
+      # 8. استنساخ AnyKernel3 (sixteen)
       - name: Clone AnyKernel3 (sixteen)
-        run: git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/AnyKernel3.git
+        run: |
+          cd kernel_xiaomi_violet
+          git clone --single-branch --branch sixteen https://github.com/Red-A-Hawk/AnyKernel3.git
 
-      # نسخ صورة النواة
+      # 9. نسخ صورة النواة إلى مجلد AnyKernel3
       - name: Copy Kernel Image
-        run: cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3
+        run: |
+          cd kernel_xiaomi_violet
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3
 
-      # إنشاء ملف Flashable ZIP
+      # 10. إنشاء ملف Flashable ZIP
       - name: Create Flashable ZIP
         run: |
           cd AnyKernel3
           zip -r9 ../kernel.zip .
 
-      # تنزيل zipsigner
+      # 11. تنزيل zipsigner
       - name: Download zipsigner
         run: |
           curl -LO https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
 
-      # توقيع ملف ZIP النهائي
+      # 12. توقيع ملف الـ ZIP النهائي
       - name: Sign the Flashable ZIP
         run: |
           java -jar zipsigner-3.0-dexed.jar kernel.zip kernel_signed.zip
 
-      # رفع ملف الـ Flashable ZIP الموقع
+      # 13. رفع ملف الـ Flashable ZIP الموقع
       - name: Upload signed flashable kernel
         uses: actions/upload-artifact@v4
         with:
           name: flashable_kernel_signed
           path: kernel_signed.zip
+
+      # 14. إتمام العمل
+      - name: Complete job
+        run: echo "Kernel build and flashing is complete!"
