@@ -1,9 +1,8 @@
-name: Build KernelSU Next v1.1.1 (violet | sixteen)
+name: Build KernelSU Next (violet | sixteen)
 
 on:
   push:
-    branches:
-      - sixteen
+    branches: [sixteen]
   workflow_dispatch:
 
 jobs:
@@ -12,13 +11,20 @@ jobs:
 
     steps:
     # 1️⃣ Checkout kernel source (sixteen)
-    - name: Checkout kernel source
+    - name: Checkout kernel
       uses: actions/checkout@v4
       with:
         ref: sixteen
         fetch-depth: 1
 
-    # 2️⃣ Dependencies
+    # 2️⃣ Fetch defconfig ONLY from sixteen-ksu
+    - name: Fetch defconfig from sixteen-ksu
+      run: |
+        git fetch origin sixteen-ksu
+        git show origin/sixteen-ksu:arch/arm64/configs/vendor/violet-perf_defconfig \
+          > arch/arm64/configs/vendor/violet-perf_defconfig
+
+    # 3️⃣ Dependencies
     - name: Install dependencies
       run: |
         sudo apt update
@@ -30,39 +36,28 @@ jobs:
           gcc-arm-linux-gnueabi \
           python3 python3-pip
 
-    # 3️⃣ ZyCromerZ Clang
-    - name: Setup ZyCromerZ Clang 15.0.7
+    # 4️⃣ ZyCromerZ Clang
+    - name: Setup ZyCromerZ Clang
       run: |
         mkdir clang
         wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    # 4️⃣ defconfig من sixteen-ksu
-    - name: Import defconfig from sixteen-ksu
-      run: |
-        git fetch origin sixteen-ksu
-        git show origin/sixteen-ksu:arch/arm64/configs/vendor/violet-perf_defconfig \
-          > arch/arm64/configs/vendor/violet-perf_defconfig
-        echo "✅ defconfig imported from sixteen-ksu"
-
     # 5️⃣ KernelSU Next v1.1.1
     - name: Setup KernelSU Next v1.1.1
       run: |
         git clone --depth=1 -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
         bash KernelSU-Next/kernel/setup.sh
-        echo "✅ KernelSU Next v1.1.1 integrated"
 
-    # 6️⃣ SUSFS non-GKI patches
-    - name: Apply SUSFS non-GKI patches
+    # 6️⃣ KernelSU non-GKI patches
+    - name: Apply KernelSU non-GKI patches
       run: |
         git clone --depth=1 -b non-GKI https://github.com/jonjeexe/KernelSU_Patches.git
-        cd KernelSU_Patches
-        bash apply.sh
-        echo "✅ SUSFS non-GKI patches applied"
+        bash KernelSU_Patches/Patch.sh
 
-    # 7️⃣ Build environment
-    - name: Export build environment
+    # 7️⃣ Build env
+    - name: Export build env
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
@@ -73,35 +68,35 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # 8️⃣ Load defconfig
+    # 8️⃣ Defconfig
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
+        make O=out olddefconfig
 
-    # 9️⃣ Build kernel
+    # 9️⃣ Build
     - name: Build kernel
       run: |
         make O=out -j$(nproc)
 
-    # 🔟 Check outputs
-    - name: Check build output
+    # 🔟 AnyKernel3
+    - name: Package AnyKernel3
       run: |
-        test -f out/arch/arm64/boot/Image.gz
-        test -f out/arch/arm64/boot/dtbo.img
-        echo "✅ Image.gz & dtbo.img OK"
-
-    # 1️⃣1️⃣ AnyKernel3
-    - name: Package with AnyKernel3
-      run: |
-        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3.git
+        git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git
         cp out/arch/arm64/boot/Image.gz AnyKernel3/
         cp out/arch/arm64/boot/dtbo.img AnyKernel3/
         cd AnyKernel3
-        zip -r9 ../KernelSU-Next-v1.1.1-Violet.zip *
+        zip -r9 ../kernel-unsigned.zip *
+
+    # 1️⃣1️⃣ zipsigner
+    - name: Sign zip
+      run: |
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner-3.0-dexed.jar kernel-unsigned.zip kernel.zip
 
     # 1️⃣2️⃣ Upload
-    - name: Upload flashable ZIP
+    - name: Upload ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: KernelSU-Next-v1.1.1-Violet
-        path: KernelSU-Next-v1.1.1-Violet.zip
+        name: KernelSU-Next-Violet
+        path: kernel.zip
