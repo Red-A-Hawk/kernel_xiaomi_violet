@@ -1,6 +1,8 @@
-name: Build Kernel (violet | KSU + SUSFS)
+name: Build KernelSU Next (violet | sixteen)
 
 on:
+  push:
+    branches: [sixteen]
   workflow_dispatch:
 
 jobs:
@@ -8,102 +10,69 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    # 1️⃣ Checkout kernel source
     - name: Checkout kernel
       uses: actions/checkout@v4
       with:
-        repository: Red-A-Hawk/kernel_xiaomi_violet
         ref: sixteen
-        path: kernel
+        fetch-depth: 1
 
-    # 2️⃣ Install dependencies
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
-          bc bison build-essential curl flex git \
-          libssl-dev libncurses5-dev libelf-dev \
-          zip unzip wget python3 \
-          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          bc bison flex libssl-dev build-essential \
+          git curl zip unzip python3 clang lld
 
-    # 3️⃣ Setup ZyCromerZ Clang
-    - name: Setup ZyCromerZ Clang
-      run: |
-        mkdir clang
-        wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
-        tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
-        echo "$PWD/clang/bin" >> $GITHUB_PATH
-
-    # 4️⃣ Fetch defconfig
     - name: Fetch defconfig
-      working-directory: kernel
       run: |
-        git fetch origin sixteen-ksu
-        git show origin/sixteen-ksu:arch/arm64/configs/vendor/violet-perf_defconfig \
-          > arch/arm64/configs/vendor/violet-perf_defconfig
+        cp vendor/violet-perf_defconfig arch/arm64/configs/violet_defconfig
 
-    # 5️⃣ Apply KernelSU Next
     - name: Apply KernelSU Next
-      working-directory: kernel
       run: |
-        git clone --depth=1 -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
-        bash KernelSU-Next/kernel/setup.sh
+        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU/main/kernel/setup.sh | bash -
 
-    # 6️⃣ Apply KernelSU non-GKI patch ✅ (FIXED)
+    # ✅ FIXED non-GKI PATCH (no cd, no path error)
     - name: Apply KernelSU non-GKI patch
-      working-directory: kernel
       run: |
-        git clone --depth=1 -b non-GKI https://github.com/jonjeexe/KernelSU_Patches.git Patches
-        bash Patches/Patch.sh
+        git clone --depth=1 -b non-GKI \
+          https://github.com/jonjeexe/KernelSU_Patches.git Patches
+        bash Patches/non-GKI/Patch.sh
 
-    # 7️⃣ Apply SUSFS kernel patch
     - name: Apply SUSFS kernel patch
-      working-directory: kernel
       run: |
-        git clone --depth=1 https://github.com/infectedmushi/susfs4ksu.git /tmp/susfs
-        patch -p1 < /tmp/susfs/kernel_patches/50_add_susfs_in_kernel-5.4.patch
+        git clone --depth=1 https://github.com/infectedmushi/susfs4ksu.git
+        bash susfs4ksu/kernel/patch.sh
 
-    # 8️⃣ Build kernel
+    - name: Enable SUSFS configs
+      run: |
+        echo "CONFIG_KSU=y" >> arch/arm64/configs/violet_defconfig
+        echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/violet_defconfig
+
     - name: Build kernel
-      working-directory: kernel
       run: |
         export ARCH=arm64
         export SUBARCH=arm64
-        export CC=clang
-        export LD=ld.lld
-        export LLVM=1
-        export LLVM_IAS=1
-        export CROSS_COMPILE=aarch64-linux-gnu-
-        export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+        make violet_defconfig
+        make -j$(nproc)
 
-        make O=out vendor/violet-perf_defconfig
-        make O=out -j$(nproc)
-
-    # 9️⃣ Package AnyKernel3
     - name: Package AnyKernel3
-      working-directory: kernel
       run: |
-        git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git
-        cp out/arch/arm64/boot/Image.gz AnyKernel3/
-        cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-
+        git clone https://github.com/osm0sis/AnyKernel3.git
+        cp arch/arm64/boot/Image AnyKernel3/
         cd AnyKernel3
-        zip -r9 ../kernel-unsigned.zip *
+        zip -r9 ../kernel.zip *
 
-    # 🔟 Download zipsigner
     - name: Download zipsigner
       run: |
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        curl -Lo zipsigner.jar \
+          https://github.com/zhanghai/AndroidZipsigner/releases/download/v3.0/zipsigner-3.0.jar
 
-    # 1️⃣1️⃣ Sign ZIP
     - name: Sign ZIP
       run: |
-        java -jar zipsigner-3.0-dexed.jar \
-          kernel-unsigned.zip kernel-signed.zip
+        java -jar zipsigner.jar kernel.zip kernel-signed.zip
 
-    # 1️⃣2️⃣ Upload flashable ZIP
     - name: Upload flashable ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-Violet-KSU-SUSFS
+        name: KernelSU-Next-violet
         path: kernel-signed.zip
