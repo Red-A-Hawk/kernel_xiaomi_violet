@@ -10,30 +10,109 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    # 1️⃣ Checkout kernel source (sixteen فقط)
-    - name: Checkout kernel source
-      uses: actions/checkout@v4
-      with:
-        ref: sixteen
-        fetch-depth: 1
+    # 1️⃣ Clone kernel source (sixteen)
+    - name: Clone kernel source
+      run: |
+        git clone --depth=1 -b sixteen https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git kernel
 
     # 2️⃣ Install dependencies
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
-          git bc bison flex libssl-dev \
-          make zip unzip curl wget \
-          libelf-dev libncurses5-dev \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi \
-          python3 python3-pip
+          bc bison build-essential curl flex git \
+          libssl-dev libncurses5-dev libelf-dev \
+          zip unzip wget python3 \
+          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
     # 3️⃣ Setup ZyCromerZ Clang
-    - name: Setup ZyCromerZ Clang 15.0.7
+    - name: Setup ZyCromerZ Clang
       run: |
         mkdir clang
         wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
+        echo "$PWD/clang/bin" >> $GITHUB_PATH
+
+    # 4️⃣ Fetch defconfig ONLY from sixteen-ksu
+    - name: Fetch defconfig from sixteen-ksu
+      working-directory: kernel
+      run: |
+        git fetch origin sixteen-ksu
+        git show origin/sixteen-ksu:arch/arm64/configs/vendor/violet-perf_defconfig \
+          > arch/arm64/configs/vendor/violet-perf_defconfig
+
+    # 5️⃣ Apply KernelSU Next (setup.sh)
+    - name: Apply KernelSU Next setup
+      working-directory: kernel
+      run: |
+        git clone --depth=1 -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
+        bash KernelSU-Next/kernel/setup.sh
+
+    # 6️⃣ Apply KernelSU Next non-GKI patch.sh
+    - name: Apply KernelSU non-GKI patch
+      working-directory: kernel
+      run: |
+        bash KernelSU-Next/kernel/patch.sh
+
+    # 7️⃣ Apply SUSFS (files + KernelSU patch)
+    - name: Apply SUSFS
+      working-directory: kernel
+      run: |
+        git clone --depth=1 https://github.com/infectedmushi/susfs4ksu.git /tmp/susfs
+
+        # Copy SUSFS files
+        cp /tmp/susfs/kernel_patches/fs/susfs.c fs/
+        cp /tmp/susfs/kernel_patches/include/linux/susfs.h include/linux/
+
+        # Apply SUSFS <-> KernelSU patch
+        patch -p1 < /tmp/susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+
+    # 8️⃣ Enable SUSFS configs
+    - name: Enable SUSFS configs
+      working-directory: kernel
+      run: |
+        echo "CONFIG_SUSFS=y" >> arch/arm64/configs/vendor/violet-perf_defconfig
+        echo "CONFIG_SUSFS_SUS_PATH=y" >> arch/arm64/configs/vendor/violet-perf_defconfig
+
+    # 9️⃣ Build kernel
+    - name: Build kernel
+      working-directory: kernel
+      run: |
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export CC=clang
+        export LD=ld.lld
+        export LLVM=1
+        export LLVM_IAS=1
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+        make O=out vendor/violet-perf_defconfig
+        make O=out -j$(nproc)
+
+    # 🔟 Package AnyKernel3
+    - name: Package AnyKernel3
+      working-directory: kernel
+      run: |
+        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3.git
+        cp out/arch/arm64/boot/Image.gz AnyKernel3/
+        cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+
+        cd AnyKernel3
+        zip -r9 ../kernel-unsigned.zip *
+
+    # 1️⃣1️⃣ Sign ZIP
+    - name: Sign ZIP
+      run: |
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner-3.0-dexed.jar kernel-unsigned.zip kernel-signed.zip
+
+    # 1️⃣2️⃣ Upload flashable ZIP
+    - name: Upload flashable ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Violet-KSU-Next-SUSFS
+        path: kernel-signed.zip
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
