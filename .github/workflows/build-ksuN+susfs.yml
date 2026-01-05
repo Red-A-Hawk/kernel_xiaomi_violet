@@ -1,0 +1,142 @@
+name: Build KernelSU Next + SUSFS (violet | susfs-1.5)
+
+on:
+  push:
+    branches:
+      - susfs-1.5
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    # 1️⃣ Checkout kernel source
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+      with:
+        ref: susfs-1.5
+
+    # 2️⃣ Install dependencies
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git bc bison flex libssl-dev \
+          make zip unzip curl wget \
+          libelf-dev libncurses5-dev \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi
+
+    # 3️⃣ Setup ZyCromerZ Clang 22
+    - name: Setup Clang
+      run: |
+        wget https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz
+        tar -xvf Clang-22.0.0git-20250920.tar.gz
+        echo "$PWD/Clang-22.0.0git-20250920/bin" >> $GITHUB_PATH
+
+    # 4️⃣ Setup KernelSU Next v1.1.1
+    - name: Setup KernelSU Next
+      run: |
+        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
+        cd KernelSU-Next
+        git checkout v1.1.1
+        cd ..
+        bash KernelSU-Next/kernel/setup.sh
+
+    # 5️⃣ Export build environment
+    - name: Export build environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+    # 6️⃣ Load defconfig (from branch)
+    - name: Load defconfig
+      run: |
+        make O=out vendor/violet-perf_defconfig
+
+    # 7️⃣ Build kernel (log enabled)
+    - name: Build kernel
+      run: |
+        mkdir -p logs
+        make O=out -j$(nproc) 2>&1 | tee logs/build.log
+
+    # 8️⃣ Package with AnyKernel3
+    - name: Package with AnyKernel3
+      run: |
+        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git
+        cp out/arch/arm64/boot/Image.gz AnyKernel3/
+
+        if [ -f out/arch/arm64/boot/dtbo.img ]; then
+          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+        fi
+
+        cd AnyKernel3
+        zip -r9 ../KernelSU-SUSFS-Violet.zip *
+
+    # 9️⃣ ZipSigner
+    - name: Sign zip
+      run: |
+        wget -O zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner.jar \
+          KernelSU-SUSFS-Violet.zip \
+          KernelSU-SUSFS-Violet-signed.zip
+
+    # 🔟 Upload flashable ZIP
+    - name: Upload flashable ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: KernelSU-SUSFS-Violet
+        path: KernelSU-SUSFS-Violet-signed.zip
+
+    # 📄 Upload build log
+    - name: Upload build log
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Build-Log
+        path: logs/build.log
+
+    # 🧠 Artificial / Professional Summary
+    - name: Build summary
+      run: |
+        {
+          echo "# 🧠 Kernel Build Report"
+          echo ""
+          echo "## 📱 Device"
+          echo "- Redmi Note 7 Pro (violet)"
+          echo "- Android 16 (Custom ROM)"
+          echo ""
+          echo "## 🌿 Kernel Branch"
+          echo "- susfs-1.5"
+          echo ""
+          echo "## 🔐 Root & Hiding"
+          echo "- KernelSU Next v1.1.1"
+          echo "- SUSFS v1.5 (native, full features)"
+          echo ""
+          echo "## 🛠 Toolchain"
+          echo "- ZyCromerZ Clang 22.0.0git"
+          echo "- LLVM enabled"
+          echo ""
+          echo "## 📦 Output"
+          echo "- Flashable ZIP: KernelSU-SUSFS-Violet-signed.zip"
+          if [ -f out/arch/arm64/boot/dtbo.img ]; then
+            echo "- dtbo.img: Included ✅"
+          else
+            echo "- dtbo.img: Not included ⚠️"
+          fi
+          echo ""
+          echo "## 📄 Logs"
+          echo "- Full build log available as artifact"
+          echo ""
+          echo "## 🕒 Build Time"
+          echo "- $(date -u) (UTC)"
+          echo ""
+          echo "---"
+          echo "_Built using GitHub Actions to preserve local hardware resources._"
+        } >> $GITHUB_STEP_SUMMARY
