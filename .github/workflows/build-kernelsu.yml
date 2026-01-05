@@ -28,7 +28,7 @@ jobs:
           gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
     # 3️⃣ Setup ZyCromerZ Clang
-    - name: Setup ZyCromerZ Clang
+    - name: Setup Clang
       run: |
         mkdir clang
         wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
@@ -36,33 +36,42 @@ jobs:
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
     # 4️⃣ Fetch defconfig ONLY from sixteen-ksu
-    - name: Fetch defconfig from sixteen-ksu
+    - name: Fetch defconfig
       run: |
         git fetch origin sixteen-ksu
         git show origin/sixteen-ksu:arch/arm64/configs/vendor/violet-perf_defconfig \
           > arch/arm64/configs/vendor/violet-perf_defconfig
 
-    # 5️⃣ Apply KernelSU Next (setup)
+    # 5️⃣ Apply KernelSU Next
     - name: Apply KernelSU Next
       run: |
         git clone --depth=1 -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
         bash KernelSU-Next/kernel/setup.sh
 
-    # 6️⃣ Apply KernelSU non-GKI patch (Patch.sh)
+    # 6️⃣ Apply KernelSU non-GKI patch
     - name: Apply KernelSU non-GKI patch
       run: |
         git clone --depth=1 https://github.com/jonjeexe/KernelSU_Patches.git
-cd KernelSU_Patches/non-GKI
-bash Patch.sh
+        pushd KernelSU_Patches/non-GKI
+        bash Patch.sh
+        popd
 
-    # 7️⃣ Apply SUSFS kernel patches (5.4)
+    # 7️⃣ Apply SUSFS kernel patch (5.4)
     - name: Apply SUSFS kernel patch
       run: |
-        git clone --depth=1 https://github.com/infectedmushi/susfs4ksu.git
-        patch -p1 < susfs4ksu/kernel_patches/50_add_susfs_in_kernel-5.4.patch
-        patch -p1 < susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+        git clone https://github.com/infectedmushi/susfs4ksu.git /tmp/susfs
+        patch -p1 < /tmp/susfs/kernel_patches/50_add_susfs_in_kernel-5.4.patch
 
-    # 8️⃣ Build kernel
+    # 8️⃣ Enable SUSFS configs
+    - name: Enable SUSFS configs
+      run: |
+        scripts/config --file arch/arm64/configs/vendor/violet-perf_defconfig \
+          -e CONFIG_SUSFS \
+          -e CONFIG_SUSFS_PROC \
+          -e CONFIG_SUSFS_SYSFS \
+          -e CONFIG_SUSFS_DEBUG
+
+    # 9️⃣ Build kernel
     - name: Build kernel
       run: |
         export ARCH=arm64
@@ -77,17 +86,27 @@ bash Patch.sh
         make O=out vendor/violet-perf_defconfig
         make O=out -j$(nproc)
 
-    # 9️⃣ Package with AnyKernel3
+    # 🔟 Package AnyKernel3
     - name: Package AnyKernel3
       run: |
-        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3.git
+        git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git
         cp out/arch/arm64/boot/Image.gz AnyKernel3/
         cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-
         cd AnyKernel3
-        zip -r9 ../kernel-violet-KSU-SUSFS.zip *
+        zip -r9 ../kernel-unsigned.zip *
 
-    # 🔟 Upload flashable ZIP
+    # 1️⃣1️⃣ Download zipsigner
+    - name: Download zipsigner
+      run: |
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+
+    # 1️⃣2️⃣ Sign ZIP
+    - name: Sign ZIP
+      run: |
+        java -jar zipsigner-3.0-dexed.jar \
+          kernel-unsigned.zip kernel-violet-KSU-SUSFS.zip
+
+    # 1️⃣3️⃣ Upload flashable ZIP
     - name: Upload flashable ZIP
       uses: actions/upload-artifact@v4
       with:
