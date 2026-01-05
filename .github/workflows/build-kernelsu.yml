@@ -35,7 +35,7 @@ jobs:
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    # 4️⃣ Fetch defconfig ONLY from sixteen-ksu
+    # 4️⃣ Fetch defconfig from sixteen-ksu
     - name: Fetch defconfig
       run: |
         git fetch origin sixteen-ksu
@@ -48,13 +48,12 @@ jobs:
         git clone --depth=1 -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
         bash KernelSU-Next/kernel/setup.sh
 
-    # 6️⃣ Apply KernelSU non-GKI patch
+    # 6️⃣ Apply KernelSU non-GKI patch (FIXED)
     - name: Apply KernelSU non-GKI patch
-  working-directory: kernel
-  run: |
-    git clone --depth=1 -b non-GKI https://github.com/jonjeexe/KernelSU_Patches.git
-    cd KernelSU_Patches
-    bash Patch.sh
+      run: |
+        git clone --depth=1 -b non-GKI https://github.com/jonjeexe/KernelSU_Patches.git
+        cd KernelSU_Patches
+        bash Patch.sh
 
     # 7️⃣ Apply SUSFS kernel patch (5.4)
     - name: Apply SUSFS kernel patch
@@ -65,11 +64,8 @@ jobs:
     # 8️⃣ Enable SUSFS configs
     - name: Enable SUSFS configs
       run: |
-        scripts/config --file arch/arm64/configs/vendor/violet-perf_defconfig \
-          -e CONFIG_SUSFS \
-          -e CONFIG_SUSFS_PROC \
-          -e CONFIG_SUSFS_SYSFS \
-          -e CONFIG_SUSFS_DEBUG
+        echo "CONFIG_SUSFS=y" >> arch/arm64/configs/vendor/violet-perf_defconfig
+        echo "CONFIG_SUSFS_HIDE=y" >> arch/arm64/configs/vendor/violet-perf_defconfig
 
     # 9️⃣ Build kernel
     - name: Build kernel
@@ -92,6 +88,7 @@ jobs:
         git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git
         cp out/arch/arm64/boot/Image.gz AnyKernel3/
         cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+
         cd AnyKernel3
         zip -r9 ../kernel-unsigned.zip *
 
@@ -103,12 +100,11 @@ jobs:
     # 1️⃣2️⃣ Sign ZIP
     - name: Sign ZIP
       run: |
-        java -jar zipsigner-3.0-dexed.jar \
-          kernel-unsigned.zip kernel-violet-KSU-SUSFS.zip
+        java -jar zipsigner-3.0-dexed.jar kernel-unsigned.zip kernel-signed.zip
 
     # 1️⃣3️⃣ Upload flashable ZIP
     - name: Upload flashable ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-Violet-KSU-SUSFS
-        path: kernel-violet-KSU-SUSFS.zip
+        name: Kernel-Violet-sixteen-KSU-SUSFS
+        path: kernel-signed.zip
