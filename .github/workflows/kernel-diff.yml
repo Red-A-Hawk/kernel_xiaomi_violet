@@ -1,45 +1,92 @@
-name: Kernel diff (sixteen vs sixteen-ksu)
+name: Build KernelSU Next (violet | sixteen)
 
 on:
-  workflow_dispatch:
   push:
-    branches: [sixteen]
+    branches:
+      - sixteen
+  workflow_dispatch:
 
 jobs:
-  diff:
+  build:
     runs-on: ubuntu-22.04
 
     steps:
-      # 1️⃣ Checkout repository (فرع sixteen)
+      # ===============================
+      # 0️⃣ إعداد بيئة العمل
+      # ===============================
+      - name: Setup environment
+        run: |
+          sudo apt update
+          sudo apt install -y git curl zip unzip bc bison flex build-essential \
+            libssl-dev libncurses-dev libelf-dev python3
+
+      # ===============================
+      # 1️⃣ Checkout الريبو (بدون تحديد ref)
+      # مهم جدًا لتفادي مشاكل refs
+      # ===============================
       - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
-          ref: sixteen
-          fetch-depth: 0   # مهم جدًا
+          fetch-depth: 0   # ضروري للـ diff
 
-      # 2️⃣ Fetch all needed branches
-      - name: Fetch all branches
+      # ===============================
+      # 2️⃣ جلب كل الفروع بشكل صريح
+      # ===============================
+      - name: Fetch all branches explicitly
         run: |
+          git remote -v
           git fetch origin sixteen
           git fetch origin sixteen-ksu
 
-      # 3️⃣ Generate git diff reports (✔ الإصلاح هنا)
+          # إنشاء refs محلية واضحة
+          git branch sixteen origin/sixteen || true
+          git branch sixteen-ksu origin/sixteen-ksu || true
+
+          git branch -a
+
+      # ===============================
+      # 3️⃣ تأكيد أننا على فرع sixteen
+      # ===============================
+      - name: Checkout sixteen branch
+        run: |
+          git checkout sixteen
+          git status
+
+      # ===============================
+      # 4️⃣ توليد تقارير git diff (المهم)
+      # ===============================
       - name: Generate git diff reports
         run: |
           mkdir -p diff-report
 
-          git diff origin/sixteen..origin/sixteen-ksu > diff-report/full.diff
-          git diff --stat origin/sixteen..origin/sixteen-ksu > diff-report/stat.txt
-          git diff --name-only origin/sixteen..origin/sixteen-ksu > diff-report/files.txt
+          echo "=== FULL DIFF ==="
+          git diff sixteen..sixteen-ksu > diff-report/full.diff
 
-      # 4️⃣ Compress report (خفيف)
+          echo "=== FILE LIST ==="
+          git diff --name-only sixteen..sixteen-ksu > diff-report/files.txt
+
+          echo "=== STAT ==="
+          git diff --stat sixteen..sixteen-ksu > diff-report/stat.txt
+
+          # تقسيم الديف حسب المسارات المهمة
+          git diff sixteen..sixteen-ksu -- kernel/ > diff-report/kernel.diff || true
+          git diff sixteen..sixteen-ksu -- fs/ > diff-report/fs.diff || true
+          git diff sixteen..sixteen-ksu -- drivers/ > diff-report/drivers.diff || true
+          git diff sixteen..sixteen-ksu -- include/ > diff-report/include.diff || true
+          git diff sixteen..sixteen-ksu -- arch/arm64/ > diff-report/arch-arm64.diff || true
+
+      # ===============================
+      # 5️⃣ ضغط التقارير
+      # ===============================
       - name: Compress diff report
         run: |
-          tar -czf kernel-diff-report.tar.gz diff-report
+          zip -r kernel-diff-report.zip diff-report
 
-      # 5️⃣ Upload artifact
-      - name: Upload diff artifact
+      # ===============================
+      # 6️⃣ رفع التقارير
+      # ===============================
+      - name: Upload diff report
         uses: actions/upload-artifact@v4
         with:
           name: kernel-diff-report
-          path: kernel-diff-report.tar.gz
+          path: kernel-diff-report.zip
