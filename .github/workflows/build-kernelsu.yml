@@ -52,7 +52,8 @@ jobs:
     - name: Apply KernelSU non-GKI patch
       run: |
         git clone --depth=1 https://github.com/jonjeexe/KernelSU_Patches.git
-        bash KernelSU_Patches/Patch.sh
+cd KernelSU_Patches/non-GKI
+bash Patch.sh
 
     # 7️⃣ Apply SUSFS kernel patches (5.4)
     - name: Apply SUSFS kernel patch
