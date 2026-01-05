@@ -1,4 +1,4 @@
-name: Build Kernel (violet | susfs-1.5)
+name: Build Kernel (violet | susfs-1.5 + KernelSU Next)
 
 on:
   push:
@@ -25,12 +25,13 @@ jobs:
         sudo apt install -y \
           git bc bison flex libssl-dev \
           make zip unzip curl wget \
-          libelf-dev libncurses5-dev \
+          libelf-dev libncurses-dev \
           gcc-aarch64-linux-gnu \
           gcc-arm-linux-gnueabi \
-          python3
+          python3 \
+          openjdk-17-jre-headless
 
-    # 3️⃣ Setup ZyCromerZ Clang (يحتوي lld)
+    # 3️⃣ Setup ZyCromerZ Clang (with lld)
     - name: Setup Clang
       run: |
         mkdir clang
@@ -38,67 +39,77 @@ jobs:
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    # 4️⃣ Export build environment
+    # 4️⃣ Merge KernelSU Next v1.1.1
+    - name: Setup KernelSU Next v1.1.1
+      run: |
+        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
+        cd KernelSU-Next
+        git checkout v1.1.1
+        cd ..
+        bash KernelSU-Next/kernel/setup.sh
+
+    # 5️⃣ Export build environment
     - name: Export build environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
         echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
         echo "LLVM=1" >> $GITHUB_ENV
         echo "LLVM_IAS=1" >> $GITHUB_ENV
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # 5️⃣ Load defconfig
+    # 6️⃣ Load defconfig
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
 
-    # 6️⃣ Set LOCALVERSION (اختياري لكن احترافي)
+    # 7️⃣ Set LOCALVERSION
     - name: Set LOCALVERSION
       run: |
         scripts/config --file out/.config \
-          --set-str LOCALVERSION "-susfs-1.5"
+          --set-str LOCALVERSION "-ksu-susfs-1.5"
         make O=out olddefconfig
 
-    # 7️⃣ Build kernel
+    # 8️⃣ Build kernel
     - name: Build kernel
       run: |
         make O=out -j$(nproc) 2>&1 | tee build.log
 
-    # 8️⃣ Check output
+    # 9️⃣ Check output
     - name: Check build output
       run: |
         test -f out/arch/arm64/boot/Image.gz || exit 1
         echo "✅ Image.gz ready"
 
-    # 9️⃣ Package with AnyKernel3
+    # 🔟 Package with AnyKernel3
     - name: Package AnyKernel3
       run: |
         git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git AK3
         cp out/arch/arm64/boot/Image.gz AK3/
         [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
         cd AK3
-        zip -r9 ../Kernel-violet-susfs-1.5-unsigned.zip *
+        zip -r9 ../Kernel-violet-ksu-susfs-1.5-unsigned.zip *
 
-    # 🔟 Download zipsigner
+    # 1️⃣1️⃣ Download zipsigner
     - name: Download zipsigner
       run: |
         wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
 
-    # 1️⃣1️⃣ Sign zip
+    # 1️⃣2️⃣ Sign zip
     - name: Sign zip
       run: |
         java -jar zipsigner-3.0-dexed.jar \
-          Kernel-violet-susfs-1.5-unsigned.zip \
-          Kernel-violet-susfs-1.5.zip
+          Kernel-violet-ksu-susfs-1.5-unsigned.zip \
+          Kernel-violet-ksu-susfs-1.5.zip
 
-    # 1️⃣2️⃣ Upload artifacts
+    # 1️⃣3️⃣ Upload artifacts
     - name: Upload ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-violet-susfs-1.5
-        path: Kernel-violet-susfs-1.5.zip
+        name: Kernel-violet-ksu-susfs-1.5
+        path: Kernel-violet-ksu-susfs-1.5.zip
 
     - name: Upload build log (on failure)
       if: failure()
