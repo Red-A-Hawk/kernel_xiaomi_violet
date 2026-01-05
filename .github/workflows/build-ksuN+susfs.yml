@@ -1,4 +1,4 @@
-name: Build KernelSU Next + SUSFS (violet | susfs-1.5)
+name: Build KernelSU Next + SUSFS 1.5 (violet)
 
 on:
   push:
@@ -18,20 +18,20 @@ jobs:
         ref: susfs-1.5
 
     # 2️⃣ Install dependencies
-    - name: Install dependencies
+    - name: Install build dependencies
       run: |
         sudo apt update
         sudo apt install -y \
           git bc bison flex libssl-dev \
-          make zip unzip curl wget \
+          make zip unzip curl \
           libelf-dev libncurses5-dev \
           gcc-aarch64-linux-gnu \
           gcc-arm-linux-gnueabi
 
-    # 3️⃣ Setup ZyCromerZ Clang 22
-    - name: Setup Clang
+    # 3️⃣ Setup Clang 22 (ZyCromerZ)
+    - name: Setup Clang 22
       run: |
-        wget https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz
         tar -xvf Clang-22.0.0git-20250920.tar.gz
         echo "$PWD/Clang-22.0.0git-20250920/bin" >> $GITHUB_PATH
 
@@ -56,16 +56,16 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # 6️⃣ Load defconfig (from branch)
+    # 6️⃣ Load defconfig (LOCALVERSION + SUSFS جاهزة)
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
+        make O=out olddefconfig
 
-    # 7️⃣ Build kernel (log enabled)
+    # 7️⃣ Build kernel
     - name: Build kernel
       run: |
-        mkdir -p logs
-        make O=out -j$(nproc) 2>&1 | tee logs/build.log
+        make O=out -j$(nproc) 2>&1 | tee build.log
 
     # 8️⃣ Package with AnyKernel3
     - name: Package with AnyKernel3
@@ -78,65 +78,34 @@ jobs:
         fi
 
         cd AnyKernel3
-        zip -r9 ../KernelSU-SUSFS-Violet.zip *
+        zip -r9 ../Kernel-violet-unsigned.zip *
 
     # 9️⃣ ZipSigner
-    - name: Sign zip
+    - name: Sign ZIP
       run: |
         wget -O zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-        java -jar zipsigner.jar \
-          KernelSU-SUSFS-Violet.zip \
-          KernelSU-SUSFS-Violet-signed.zip
+        java -jar zipsigner.jar Kernel-violet-unsigned.zip Kernel-violet-signed.zip
 
-    # 🔟 Upload flashable ZIP
+    # 🔟 Upload artifacts
     - name: Upload flashable ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: KernelSU-SUSFS-Violet
-        path: KernelSU-SUSFS-Violet-signed.zip
+        name: Kernel-violet-SUSFS-1.5
+        path: Kernel-violet-signed.zip
 
-    # 📄 Upload build log
     - name: Upload build log
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-Build-Log
-        path: logs/build.log
+        name: Build-Log
+        path: build.log
 
-    # 🧠 Artificial / Professional Summary
+    # 1️⃣1️⃣ Artificial Summary
     - name: Build summary
       run: |
-        {
-          echo "# 🧠 Kernel Build Report"
-          echo ""
-          echo "## 📱 Device"
-          echo "- Redmi Note 7 Pro (violet)"
-          echo "- Android 16 (Custom ROM)"
-          echo ""
-          echo "## 🌿 Kernel Branch"
-          echo "- susfs-1.5"
-          echo ""
-          echo "## 🔐 Root & Hiding"
-          echo "- KernelSU Next v1.1.1"
-          echo "- SUSFS v1.5 (native, full features)"
-          echo ""
-          echo "## 🛠 Toolchain"
-          echo "- ZyCromerZ Clang 22.0.0git"
-          echo "- LLVM enabled"
-          echo ""
-          echo "## 📦 Output"
-          echo "- Flashable ZIP: KernelSU-SUSFS-Violet-signed.zip"
-          if [ -f out/arch/arm64/boot/dtbo.img ]; then
-            echo "- dtbo.img: Included ✅"
-          else
-            echo "- dtbo.img: Not included ⚠️"
-          fi
-          echo ""
-          echo "## 📄 Logs"
-          echo "- Full build log available as artifact"
-          echo ""
-          echo "## 🕒 Build Time"
-          echo "- $(date -u) (UTC)"
-          echo ""
-          echo "---"
-          echo "_Built using GitHub Actions to preserve local hardware resources._"
-        } >> $GITHUB_STEP_SUMMARY
+        echo "## ✅ Kernel Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- Device: **Redmi Note 7 Pro (violet)**" >> $GITHUB_STEP_SUMMARY
+        echo "- Branch: **susfs-1.5**" >> $GITHUB_STEP_SUMMARY
+        echo "- KernelSU Next: **v1.1.1**" >> $GITHUB_STEP_SUMMARY
+        echo "- SUSFS: **Enabled (native)**" >> $GITHUB_STEP_SUMMARY
+        echo "- Compiler: **Clang 22 (ZyCromerZ)**" >> $GITHUB_STEP_SUMMARY
+        echo "- Output: **Flashable ZIP (signed)**" >> $GITHUB_STEP_SUMMARY
