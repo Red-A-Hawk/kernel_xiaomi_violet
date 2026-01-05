@@ -1,8 +1,6 @@
-name: Build KernelSU Next (violet | sixteen | KSU + SUSFS)
+name: Build Kernel (violet | KSU + SUSFS)
 
 on:
-  push:
-    branches: [sixteen]
   workflow_dispatch:
 
 jobs:
@@ -10,12 +8,13 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    # 1️⃣ Checkout kernel source (sixteen)
+    # 1️⃣ Checkout kernel source
     - name: Checkout kernel
       uses: actions/checkout@v4
       with:
+        repository: Red-A-Hawk/kernel_xiaomi_violet
         ref: sixteen
-        fetch-depth: 1
+        path: kernel
 
     # 2️⃣ Install dependencies
     - name: Install dependencies
@@ -35,34 +34,38 @@ jobs:
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    # 4️⃣ Fetch defconfig ONLY from sixteen-ksu
+    # 4️⃣ Fetch defconfig
     - name: Fetch defconfig
+      working-directory: kernel
       run: |
         git fetch origin sixteen-ksu
         git show origin/sixteen-ksu:arch/arm64/configs/vendor/violet-perf_defconfig \
           > arch/arm64/configs/vendor/violet-perf_defconfig
 
-    # 5️⃣ Apply KernelSU Next (setup.sh)
+    # 5️⃣ Apply KernelSU Next
     - name: Apply KernelSU Next
+      working-directory: kernel
       run: |
         git clone --depth=1 -b v1.1.1 https://github.com/KernelSU-Next/KernelSU-Next.git
         bash KernelSU-Next/kernel/setup.sh
 
-    # 6️⃣ Apply KernelSU non-GKI patch (FIXED ✅)
+    # 6️⃣ Apply KernelSU non-GKI patch ✅ (FIXED)
     - name: Apply KernelSU non-GKI patch
+      working-directory: kernel
       run: |
         git clone --depth=1 -b non-GKI https://github.com/jonjeexe/KernelSU_Patches.git Patches
-        bash Patch.sh
+        bash Patches/Patch.sh
 
-    # 7️⃣ Apply SUSFS kernel patch (5.4)
+    # 7️⃣ Apply SUSFS kernel patch
     - name: Apply SUSFS kernel patch
+      working-directory: kernel
       run: |
-        git clone https://github.com/infectedmushi/susfs4ksu.git /tmp/susfs
+        git clone --depth=1 https://github.com/infectedmushi/susfs4ksu.git /tmp/susfs
         patch -p1 < /tmp/susfs/kernel_patches/50_add_susfs_in_kernel-5.4.patch
-        patch -p1 < /tmp/susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
 
     # 8️⃣ Build kernel
     - name: Build kernel
+      working-directory: kernel
       run: |
         export ARCH=arm64
         export SUBARCH=arm64
@@ -78,10 +81,11 @@ jobs:
 
     # 9️⃣ Package AnyKernel3
     - name: Package AnyKernel3
+      working-directory: kernel
       run: |
-        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3.git
+        git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git
         cp out/arch/arm64/boot/Image.gz AnyKernel3/
-        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+        cp out/arch/arm64/boot/dtbo.img AnyKernel3/
 
         cd AnyKernel3
         zip -r9 ../kernel-unsigned.zip *
