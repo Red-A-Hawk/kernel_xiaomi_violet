@@ -1,64 +1,117 @@
-name: Kernel diff report (sixteen vs sixteen-ksu)
+name: Build Kernel (violet | susfs-1.5)
 
 on:
   push:
-    branches: [sixteen]
+    branches:
+      - susfs-1.5
   workflow_dispatch:
 
 jobs:
-  diff:
+  build:
     runs-on: ubuntu-22.04
 
     steps:
-      # 1️⃣ Checkout kernel source (sixteen) — جزء بداية إجباري
-      - name: Checkout kernel source
-        uses: actions/checkout@v4
-        with:
-          ref: sixteen
-          fetch-depth: 0   # مهم جداً للـ diff
+    # 1️⃣ Checkout
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+      with:
+        ref: susfs-1.5
+        fetch-depth: 1
 
-      # 2️⃣ Fetch both branches explicitly
-      - name: Fetch all required branches
-        run: |
-          git fetch origin sixteen
-          git fetch origin sixteen-ksu
+    # 2️⃣ Dependencies
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git bc bison flex libssl-dev \
+          make zip unzip curl wget \
+          libelf-dev libncurses5-dev \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi \
+          python3
 
-      # 3️⃣ Verify branches (debug safety)
-      - name: Verify refs
-        run: |
-          git branch -a
-          git show-ref | grep sixteen || true
+    # 3️⃣ Setup ZyCromerZ Clang (FIX ld.lld)
+    - name: Setup ZyCromerZ Clang
+      run: |
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz
+        mkdir clang
+        tar -xvf Clang-22.0.0git-20250920.tar.gz -C clang
+        echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-      # 4️⃣ Generate git diff reports
-      - name: Generate git diff reports
-        run: |
-          mkdir -p diff-report
+    # 4️⃣ Export build environment
+    - name: Export build environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-          # Full diff
-          git diff origin/sixteen..origin/sixteen-ksu \
-            > diff-report/full.diff
+    # 5️⃣ Sanity check (مهم)
+    - name: Check clang tools
+      run: |
+        which clang
+        which ld.lld
+        clang --version
 
-          # Stat summary
-          git diff --stat origin/sixteen..origin/sixteen-ksu \
-            > diff-report/stat.txt
+    # 6️⃣ Load defconfig (LOCALVERSION من defconfig)
+    - name: Load defconfig
+      run: |
+        make O=out vendor/violet-perf_defconfig
 
-          # File name only
-          git diff --name-only origin/sixteen..origin/sixteen-ksu \
-            > diff-report/files.txt
+    # 7️⃣ Build kernel + log
+    - name: Build kernel
+      run: |
+        make O=out -j$(nproc) 2>&1 | tee build.log
 
-          # KernelSU / SUSFS related paths (فلترة ذكية)
-          git diff --name-only origin/sixteen..origin/sixteen-ksu \
-            | grep -Ei "kernelsu|ksu|susfs|fs/|security/" \
-            > diff-report/filtered-files.txt || true
+    # 8️⃣ AnyKernel3 packaging
+    - name: Package with AnyKernel3
+      run: |
+        git clone --depth=1 https://github.com/Joker-V2/AnyKernel3.git
+        cp out/arch/arm64/boot/Image.gz AnyKernel3/
 
-      # 5️⃣ Compress diff report (خفيف)
-      - name: Compress diff report
-        run: |
-          tar -czf kernel-diff-report.tar.gz diff-report
+        if [ -f out/arch/arm64/boot/dtbo.img ]; then
+          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+        fi
 
-      # 6️⃣ Upload artifact
-      - name: Upload diff report
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-diff-report
-          path: kernel-diff-report.tar.gz
+        cd AnyKernel3
+        zip -r9 ../Kernel-Violet-SUSFS.zip *
+
+    # 9️⃣ ZipSigner
+    - name: Sign zip
+      run: |
+        wget -O zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner.jar Kernel-Violet-SUSFS.zip Kernel-Violet-SUSFS-signed.zip
+
+    # 🔟 Upload artifacts
+    - name: Upload flashable ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Violet-SUSFS
+        path: Kernel-Violet-SUSFS-signed.zip
+
+    - name: Upload build log
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: build.log
+
+    # 🧠 Summary احترافي
+    - name: Build summary
+      run: |
+        {
+          echo "## ✅ Kernel Build Summary"
+          echo ""
+          echo "- **Device:** Redmi Note 7 Pro (violet)"
+          echo "- **Branch:** susfs-1.5"
+          echo "- **Clang:** ZyCromerZ 22"
+          echo "- **SUSFS:** Enabled (native)"
+          echo "- **KernelSU:** Integrated in source"
+          echo "- **Output:** AnyKernel3 (signed)"
+          echo ""
+          echo "### 📄 Logs"
+          echo "- build.log attached as artifact"
+        } >> $GITHUB_STEP_SUMMARY
