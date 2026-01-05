@@ -1,0 +1,54 @@
+name: Kernel Diff Report (sixteen vs sixteen-ksu)
+
+on:
+  push:
+    branches: [ sixteen ]
+  workflow_dispatch:
+
+jobs:
+  diff:
+    runs-on: ubuntu-22.04
+
+    steps:
+      # 1️⃣ Checkout repo (full history needed for diff)
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2️⃣ Make sure both branches exist locally
+      - name: Fetch all branches
+        run: |
+          git fetch origin sixteen
+          git fetch origin sixteen-ksu
+
+      # 3️⃣ Create diff reports
+      - name: Generate git diff reports
+        run: |
+          mkdir -p diff-report
+
+          echo "== Full diff ==" > diff-report/README.txt
+          git diff sixteen..sixteen-ksu > diff-report/full.diff
+
+          echo "== File list ==" >> diff-report/README.txt
+          git diff --name-status sixteen..sixteen-ksu > diff-report/files.txt
+
+          echo "== Stat summary ==" >> diff-report/README.txt
+          git diff --stat sixteen..sixteen-ksu > diff-report/stat.txt
+
+          echo "== Config changes ==" >> diff-report/README.txt
+          git diff sixteen..sixteen-ksu -- arch/arm64/configs > diff-report/defconfig.diff || true
+
+          echo "Diff generation completed"
+
+      # 4️⃣ Compress result (lighter & clean)
+      - name: Compress diff report
+        run: |
+          tar -czf kernel-diff-report.tar.gz diff-report
+
+      # 5️⃣ Upload artifact
+      - name: Upload diff artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-diff-report
+          path: kernel-diff-report.tar.gz
