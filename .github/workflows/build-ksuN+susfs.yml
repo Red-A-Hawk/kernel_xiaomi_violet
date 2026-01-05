@@ -1,4 +1,4 @@
-name: Build KernelSU Next + SUSFS 1.5 (violet)
+name: Build KernelSU Next + SUSFS (violet | susfs-1.5)
 
 on:
   push:
@@ -11,34 +11,38 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    # 1️⃣ Checkout kernel source
+    # 1️⃣ Checkout kernel source (susfs-1.5)
     - name: Checkout kernel source
       uses: actions/checkout@v4
       with:
         ref: susfs-1.5
+        fetch-depth: 1
 
     # 2️⃣ Install dependencies
-    - name: Install build dependencies
+    - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
           git bc bison flex libssl-dev \
-          make zip unzip curl \
+          make zip unzip curl wget \
           libelf-dev libncurses5-dev \
           gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi
+          gcc-arm-linux-gnueabi \
+          python3
 
-    # 3️⃣ Setup Clang 22 (ZyCromerZ)
-    - name: Setup Clang 22
+    # 3️⃣ Setup ZyCromerZ Clang
+    - name: Setup ZyCromerZ Clang
       run: |
-        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz
-        tar -xvf Clang-22.0.0git-20250920.tar.gz
-        echo "$PWD/Clang-22.0.0git-20250920/bin" >> $GITHUB_PATH
+        mkdir clang
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
+        tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
+        rm -f Clang-15.0.7-20251111.tar.gz
+        echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    # 4️⃣ Setup KernelSU Next v1.1.1
+    # 4️⃣ Setup KernelSU Next (no SUSFS config – already in branch)
     - name: Setup KernelSU Next
       run: |
-        git clone https://github.com/KernelSU-Next/KernelSU-Next.git
+        git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git
         cd KernelSU-Next
         git checkout v1.1.1
         cd ..
@@ -56,56 +60,67 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # 6️⃣ Load defconfig (LOCALVERSION + SUSFS جاهزة)
+    # 6️⃣ Load defconfig (from branch)
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
-        make O=out olddefconfig
 
     # 7️⃣ Build kernel
     - name: Build kernel
       run: |
         make O=out -j$(nproc) 2>&1 | tee build.log
 
-    # 8️⃣ Package with AnyKernel3
+    # 8️⃣ Verify output
+    - name: Verify build output
+      run: |
+        test -f out/arch/arm64/boot/Image.gz || exit 1
+        echo "✅ Image.gz ready"
+
+    # 9️⃣ Package with AnyKernel3 (Joker-V2 | sixteen)
     - name: Package with AnyKernel3
       run: |
-        git clone -b sixteen https://github.com/Joker-V2/AnyKernel3.git
-        cp out/arch/arm64/boot/Image.gz AnyKernel3/
+        git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git AK3
 
-        if [ -f out/arch/arm64/boot/dtbo.img ]; then
-          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-        fi
+        cp out/arch/arm64/boot/Image.gz AK3/
+        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
 
-        cd AnyKernel3
-        zip -r9 ../Kernel-violet-unsigned.zip *
+        DEVICE="violet"
+        ANDROID="A16"
+        BRANCH="susfs-1.5"
+        BUILD_DATE="$(date +%Y%m%d-%H%M)"
 
-    # 9️⃣ ZipSigner
+        ZIP_NAME="KernelSU-${DEVICE}-${ANDROID}-${BRANCH}-${BUILD_DATE}-unsigned.zip"
+
+        cd AK3
+        zip -r9 "../$ZIP_NAME" . -x ".git/*" "README.md"
+        cd ..
+
+        echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+    # 🔐 10️⃣ Sign ZIP
     - name: Sign ZIP
       run: |
-        wget -O zipsigner.jar https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-        java -jar zipsigner.jar Kernel-violet-unsigned.zip Kernel-violet-signed.zip
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
 
-    # 🔟 Upload artifacts
+        SIGNED_ZIP="${ZIP_NAME/-unsigned/}"
+
+        java -jar zipsigner-3.0-dexed.jar \
+          "$ZIP_NAME" \
+          "$SIGNED_ZIP"
+
+        rm -f "$ZIP_NAME"
+        echo "SIGNED_ZIP=$SIGNED_ZIP" >> $GITHUB_ENV
+
+    # 📤 11️⃣ Upload artifacts
     - name: Upload flashable ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-violet-SUSFS-1.5
-        path: Kernel-violet-signed.zip
+        name: KernelSU-SUSFS-Violet
+        path: ${{ env.SIGNED_ZIP }}
 
-    - name: Upload build log
+    - name: Upload build log (on failure)
+      if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: Build-Log
+        name: build-log
         path: build.log
-
-    # 1️⃣1️⃣ Artificial Summary
-    - name: Build summary
-      run: |
-        echo "## ✅ Kernel Build Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- Device: **Redmi Note 7 Pro (violet)**" >> $GITHUB_STEP_SUMMARY
-        echo "- Branch: **susfs-1.5**" >> $GITHUB_STEP_SUMMARY
-        echo "- KernelSU Next: **v1.1.1**" >> $GITHUB_STEP_SUMMARY
-        echo "- SUSFS: **Enabled (native)**" >> $GITHUB_STEP_SUMMARY
-        echo "- Compiler: **Clang 22 (ZyCromerZ)**" >> $GITHUB_STEP_SUMMARY
-        echo "- Output: **Flashable ZIP (signed)**" >> $GITHUB_STEP_SUMMARY
