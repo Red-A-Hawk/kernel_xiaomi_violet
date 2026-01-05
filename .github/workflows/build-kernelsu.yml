@@ -1,6 +1,8 @@
-name: Kernel Diff (sixteen vs sixteen-ksu)
+name: Kernel Diff Report (sixteen vs sixteen-ksu)
 
 on:
+  push:
+    branches: [sixteen]
   workflow_dispatch:
 
 jobs:
@@ -8,37 +10,76 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Clone kernel repo
+      # 1️⃣ Checkout kernel source (FULL history required)
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          ref: sixteen
+          fetch-depth: 0
+
+      # 2️⃣ Fetch sixteen-ksu branch
+      - name: Fetch sixteen-ksu branch
         run: |
-          git clone https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git
-          cd kernel_xiaomi_violet
-          git fetch origin sixteen sixteen-ksu
+          git fetch origin sixteen-ksu:sixteen-ksu
 
-      - name: Generate diff report
+      # 3️⃣ Verify branches
+      - name: Verify branches
         run: |
-          cd kernel_xiaomi_violet
+          echo "Current branch:"
+          git branch --show-current
+          echo "Available branches:"
+          git branch -a
 
-          mkdir diff-report
+      # 4️⃣ Diff statistics (quick overview)
+      - name: Diff statistics
+        run: |
+          git diff --stat sixteen..sixteen-ksu > diff-stat.txt
 
-          # فرق كامل
-          git diff sixteen..sixteen-ksu > diff-report/full.diff
+      # 5️⃣ Changed files list
+      - name: Changed files list
+        run: |
+          git diff --name-status sixteen..sixteen-ksu > diff-files.txt
 
-          # ملفات فقط
-          git diff --name-status sixteen..sixteen-ksu > diff-report/files.txt
+      # 6️⃣ Defconfig differences
+      - name: Defconfig diff
+        run: |
+          mkdir -p reports
+          git diff sixteen..sixteen-ksu -- arch/arm64/configs \
+            > reports/defconfig.diff || true
 
-          # فرق خاص بالـ configs
-          git diff sixteen..sixteen-ksu -- arch/arm64/configs > diff-report/configs.diff
+      # 7️⃣ Kconfig differences
+      - name: Kconfig diff
+        run: |
+          git diff sixteen..sixteen-ksu -- '**/Kconfig*' \
+            > reports/kconfig.diff || true
 
-          # فرق fs و include (غالبًا SUSFS)
-          git diff sixteen..sixteen-ksu -- fs include > diff-report/fs-include.diff
+      # 8️⃣ Core kernel areas (KernelSU / SUSFS usually here)
+      - name: Core kernel diff
+        run: |
+          git diff sixteen..sixteen-ksu -- \
+            fs \
+            security \
+            kernel \
+            drivers \
+            include \
+            > reports/core.diff || true
 
-          # KernelSU (Kconfig / Makefile)
-          git diff sixteen..sixteen-ksu -- Kconfig Makefile > diff-report/kernel-core.diff
+      # 9️⃣ Full raw diff (for deep analysis)
+      - name: Full raw diff
+        run: |
+          git diff sixteen..sixteen-ksu > reports/full.diff
 
-          tar -czf kernel-diff-report.tar.gz diff-report
+      # 🔟 Compress all reports (lightweight)
+      - name: Compress reports
+        run: |
+          tar -czf kernel-diff-report.tar.gz \
+            diff-stat.txt \
+            diff-files.txt \
+            reports/
 
+      # 1️⃣1️⃣ Upload artifact
       - name: Upload diff report
         uses: actions/upload-artifact@v4
         with:
           name: kernel-diff-report
-          path: kernel_xiaomi_violet/kernel-diff-report.tar.gz
+          path: kernel-diff-report.tar.gz
