@@ -1,8 +1,6 @@
-name: Kernel Diff Report (violet | sixteen)
+name: Kernel Diff (sixteen vs sixteen-ksu)
 
 on:
-  push:
-    branches: [sixteen]
   workflow_dispatch:
 
 jobs:
@@ -10,63 +8,37 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    # 1️⃣ Checkout kernel source (sixteen)
-    - name: Checkout kernel
-      uses: actions/checkout@v4
-      with:
-        ref: sixteen
-        fetch-depth: 1
+      - name: Clone kernel repo
+        run: |
+          git clone https://github.com/Red-A-Hawk/kernel_xiaomi_violet.git
+          cd kernel_xiaomi_violet
+          git fetch origin sixteen sixteen-ksu
 
-    # 2️⃣ Fetch sixteen-ksu branch
-    - name: Fetch sixteen-ksu
-      run: |
-        git fetch origin sixteen-ksu
+      - name: Generate diff report
+        run: |
+          cd kernel_xiaomi_violet
 
-    # 3️⃣ Prepare report directory
-    - name: Prepare report directory
-      run: |
-        mkdir diff-report
+          mkdir diff-report
 
-    # 4️⃣ Diff statistics (خفيف جدًا)
-    - name: Diff statistics
-      run: |
-        git diff origin/sixteen..origin/sixteen-ksu --stat \
-          > diff-report/01_stat.txt
+          # فرق كامل
+          git diff sixteen..sixteen-ksu > diff-report/full.diff
 
-    # 5️⃣ Changed files list (خفيف جدًا)
-    - name: Changed files list
-      run: |
-        git diff origin/sixteen..origin/sixteen-ksu --name-only \
-          > diff-report/02_files.txt
+          # ملفات فقط
+          git diff --name-status sixteen..sixteen-ksu > diff-report/files.txt
 
-    # 6️⃣ defconfig diff فقط
-    - name: defconfig diff
-      run: |
-        git diff origin/sixteen..origin/sixteen-ksu -- \
-          arch/arm64/configs/vendor/violet-perf_defconfig \
-          > diff-report/03_defconfig.diff || true
+          # فرق خاص بالـ configs
+          git diff sixteen..sixteen-ksu -- arch/arm64/configs > diff-report/configs.diff
 
-    # 7️⃣ KernelSU related diff (مفلتر)
-    - name: KernelSU diff
-      run: |
-        git diff origin/sixteen..origin/sixteen-ksu | grep -i kernelsu \
-          > diff-report/04_kernelsu.diff || true
+          # فرق fs و include (غالبًا SUSFS)
+          git diff sixteen..sixteen-ksu -- fs include > diff-report/fs-include.diff
 
-    # 8️⃣ SUSFS related diff (مفلتر)
-    - name: SUSFS diff
-      run: |
-        git diff origin/sixteen..origin/sixteen-ksu | grep -i susfs \
-          > diff-report/05_susfs.diff || true
+          # KernelSU (Kconfig / Makefile)
+          git diff sixteen..sixteen-ksu -- Kconfig Makefile > diff-report/kernel-core.diff
 
-    # 9️⃣ Compress report (أقصى ضغط)
-    - name: Compress report
-      run: |
-        tar -cf diff-report.tar diff-report
-        xz -9e diff-report.tar
+          tar -czf kernel-diff-report.tar.gz diff-report
 
-    # 🔟 Upload artifact
-    - name: Upload diff report
-      uses: actions/upload-artifact@v4
-      with:
-        name: kernel-diff-report
-        path: diff-report.tar.xz
+      - name: Upload diff report
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-diff-report
+          path: kernel_xiaomi_violet/kernel-diff-report.tar.gz
