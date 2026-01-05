@@ -1,4 +1,4 @@
-name: Build KernelSU Next (violet | sixteen)
+name: Kernel Diff Report (violet | sixteen)
 
 on:
   push:
@@ -6,73 +6,67 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  diff:
     runs-on: ubuntu-22.04
 
     steps:
+    # 1️⃣ Checkout kernel source (sixteen)
     - name: Checkout kernel
       uses: actions/checkout@v4
       with:
         ref: sixteen
         fetch-depth: 1
 
-    - name: Install dependencies
+    # 2️⃣ Fetch sixteen-ksu branch
+    - name: Fetch sixteen-ksu
       run: |
-        sudo apt update
-        sudo apt install -y \
-          bc bison flex libssl-dev build-essential \
-          git curl zip unzip python3 clang lld
+        git fetch origin sixteen-ksu
 
-    - name: Fetch defconfig
+    # 3️⃣ Prepare report directory
+    - name: Prepare report directory
       run: |
-        cp vendor/violet-perf_defconfig arch/arm64/configs/violet_defconfig
+        mkdir diff-report
 
-    - name: Apply KernelSU Next
+    # 4️⃣ Diff statistics (خفيف جدًا)
+    - name: Diff statistics
       run: |
-        curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU/main/kernel/setup.sh | bash -
+        git diff origin/sixteen..origin/sixteen-ksu --stat \
+          > diff-report/01_stat.txt
 
-    # ✅ FIXED non-GKI PATCH (no cd, no path error)
-    - name: Apply KernelSU non-GKI patch
+    # 5️⃣ Changed files list (خفيف جدًا)
+    - name: Changed files list
       run: |
-        git clone --depth=1 -b non-GKI \
-          https://github.com/jonjeexe/KernelSU_Patches.git Patches
-        bash Patches/non-GKI/Patch.sh
+        git diff origin/sixteen..origin/sixteen-ksu --name-only \
+          > diff-report/02_files.txt
 
-    - name: Apply SUSFS kernel patch
+    # 6️⃣ defconfig diff فقط
+    - name: defconfig diff
       run: |
-        git clone --depth=1 https://github.com/infectedmushi/susfs4ksu.git
-        bash susfs4ksu/kernel/patch.sh
+        git diff origin/sixteen..origin/sixteen-ksu -- \
+          arch/arm64/configs/vendor/violet-perf_defconfig \
+          > diff-report/03_defconfig.diff || true
 
-    - name: Enable SUSFS configs
+    # 7️⃣ KernelSU related diff (مفلتر)
+    - name: KernelSU diff
       run: |
-        echo "CONFIG_KSU=y" >> arch/arm64/configs/violet_defconfig
-        echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/violet_defconfig
+        git diff origin/sixteen..origin/sixteen-ksu | grep -i kernelsu \
+          > diff-report/04_kernelsu.diff || true
 
-    - name: Build kernel
+    # 8️⃣ SUSFS related diff (مفلتر)
+    - name: SUSFS diff
       run: |
-        export ARCH=arm64
-        export SUBARCH=arm64
-        make violet_defconfig
-        make -j$(nproc)
+        git diff origin/sixteen..origin/sixteen-ksu | grep -i susfs \
+          > diff-report/05_susfs.diff || true
 
-    - name: Package AnyKernel3
+    # 9️⃣ Compress report (أقصى ضغط)
+    - name: Compress report
       run: |
-        git clone https://github.com/osm0sis/AnyKernel3.git
-        cp arch/arm64/boot/Image AnyKernel3/
-        cd AnyKernel3
-        zip -r9 ../kernel.zip *
+        tar -cf diff-report.tar diff-report
+        xz -9e diff-report.tar
 
-    - name: Download zipsigner
-      run: |
-        curl -Lo zipsigner.jar \
-          https://github.com/zhanghai/AndroidZipsigner/releases/download/v3.0/zipsigner-3.0.jar
-
-    - name: Sign ZIP
-      run: |
-        java -jar zipsigner.jar kernel.zip kernel-signed.zip
-
-    - name: Upload flashable ZIP
+    # 🔟 Upload artifact
+    - name: Upload diff report
       uses: actions/upload-artifact@v4
       with:
-        name: KernelSU-Next-violet
-        path: kernel-signed.zip
+        name: kernel-diff-report
+        path: diff-report.tar.xz
