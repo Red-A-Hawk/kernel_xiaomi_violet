@@ -1,0 +1,149 @@
+name: Kernel Build (violet + KernelSU)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ sixteen ]
+    paths-ignore: [ README.md ]
+  pull_request:
+  schedule:
+    - cron: "0 12 * * *"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - type: Normal
+            ksu: false
+            ak3_suffix: ""
+          - type: KSUN
+            ksu: true
+            repo: KernelSU-Next/KernelSU-Next
+            folder: KernelSU-Next
+            branch: legacy
+            kernel_patches: "seccomp.patch get_cred_rcu.patch strncpy_from_user_nofault.patch"
+            susfs_kernel_patches: "susfs-2.0.0.patch"
+            extra_configs: "CONFIG_KSU_KPROBES_HOOK=n"
+            ak3_suffix: "-KSUNext"
+          - type: RKSU
+            ksu: true
+            repo: rsuntk/KernelSU
+            folder: KernelSU
+            branch: main
+            kernel_patches: "get_cred_rcu.patch strncpy_from_user_nofault.patch"
+            susfs_kernel_patches: "susfs-2.0.0.patch"
+            extra_configs: "CONFIG_KSU_MANUAL_HOOK=y CONFIG_KSU_SYSCALL_HOOK=n"
+            susfs_configs: "CONFIG_KSU_SUSFS=y"
+            ak3_suffix: "-RKSU"
+          - type: xxKSU
+            ksu: true
+            repo: backslashxx/KernelSU
+            folder: KernelSU
+            branch: master
+            kernel_patches: "scope-min-hooks-v1.6.patch"
+            ak3_suffix: "-xxKSU"
+
+        susfs: [ false, true ]
+
+        exclude:
+          - build:
+              type: Normal
+            susfs: true
+
+    env:
+      DEVICE: violet
+      DEFCONFIG: vendor/violet_defconfig
+      KERNEL_BRANCH: sixteen
+      KERNEL_URL: https://github.com/Joker-V2/kernel_xiaomi_violet
+      PATCHES_URL: https://github.com/TheSillyOk/kernel_ls_patches
+      ANYKERNEL_URL: https://github.com/Joker-V2/AnyKernel3
+      ANYKERNEL_BRANCH: sixteen
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            git python3 bc bison flex \
+            libssl-dev libelf-dev libncurses-dev \
+            ccache zip unzip wget rsync
+
+      - name: Setup workspace
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/workspace
+          echo "WORKSPACE=$GITHUB_WORKSPACE/workspace" >> $GITHUB_ENV
+
+      - name: Cache clang
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.WORKSPACE }}/clang
+          key: clang-r547379
+
+      - name: Download clang
+        run: |
+          if [ ! -d "${{ env.WORKSPACE }}/clang/bin" ]; then
+            wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz -O clang.tar.gz
+            mkdir -p ${{ env.WORKSPACE }}/clang
+            tar -xf clang.tar.gz -C ${{ env.WORKSPACE }}/clang
+          fi
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: violet-${{ matrix.build.type }}-susfs-${{ matrix.susfs }}-ccache
+          restore-keys: violet-
+
+      - name: Clone kernel & patches
+        run: |
+          git clone --depth=1 -b $KERNEL_BRANCH $KERNEL_URL kernel
+          git clone --depth=1 $PATCHES_URL patches
+
+      - name: Apply KernelSU
+        if: matrix.build.ksu
+        working-directory: kernel
+        run: |
+          curl -LSs https://raw.githubusercontent.com/${{ matrix.build.repo }}/${{ matrix.build.branch }}/kernel/setup.sh | bash -s ${{ matrix.build.branch }}
+
+      - name: Apply patches
+        working-directory: kernel
+        run: |
+          for p in ${{ matrix.build.kernel_patches }}; do
+            patch -p1 < ../patches/$p
+          done
+
+          if [ "${{ matrix.susfs }}" = "true" ]; then
+            for p in ${{ matrix.build.susfs_kernel_patches }}; do
+              patch -p1 < ../patches/$p
+            done
+          fi
+
+      - name: Build kernel
+        working-directory: kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export PATH=${{ env.WORKSPACE }}/clang/bin:$PATH
+          export CC="ccache clang"
+          make O=out $DEFCONFIG
+          make O=out LLVM=1 LLVM_IAS=1 -j$(nproc)
+
+      - name: Package AnyKernel3
+        run: |
+          git clone --depth=1 -b $ANYKERNEL_BRANCH $ANYKERNEL_URL ak3
+          cp kernel/out/arch/arm64/boot/Image* ak3/
+          ZIP_NAME="$(date +%Y%m%d)-violet${{ matrix.build.ak3_suffix }}$( [ "${{ matrix.susfs }}" = "true" ] && echo .SUSFS )"
+          zip -r9 "$ZIP_NAME.zip" ak3
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}.zip
+          
