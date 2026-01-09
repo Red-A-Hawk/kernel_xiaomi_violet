@@ -71,28 +71,47 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # ▼ Inject SukiSU Ultra v3.1.8 (FORCED / NO AUTO UPDATE)
-    - name: Inject SukiSU Ultra v3.1.8 (FORCED)
+    # ▼ Inject SukiSU Ultra v3.1.8 (controlled setup.sh)
+    - name: Inject SukiSU Ultra v3.1.8 (LOCKED)
       run: |
         git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra KernelSU
         cd KernelSU
 
-        # ثبّت الإصدار المطلوب
+        # تثبيت الإصدار المطلوب
         git checkout v3.1.8
 
-        # امنع أي ترقية تلقائية داخل setup.sh
-        sed -i 's/git fetch/echo "skip git fetch"/g' kernel/setup.sh
-        sed -i 's/git pull/echo "skip git pull"/g' kernel/setup.sh
-        sed -i 's/git checkout/echo "skip git checkout"/g' kernel/setup.sh
+        # تعطيل أي تحديث أو قفز داخل setup.sh
+        sed -i 's/git pull/echo "[skip] git pull"/g' kernel/setup.sh
+        sed -i 's/git checkout "$(git describe --abbrev=0 --tags)"/echo "[skip] auto tag checkout"/g' kernel/setup.sh
+        sed -i 's/git checkout "$1"/echo "[skip] arg checkout"/g' kernel/setup.sh
 
         cd ..
         bash KernelSU/kernel/setup.sh
+
+    # ▼ Check: تأكيد أن الإصدار لم يقفز
+    - name: Verify SukiSU version (MUST be 3.1.8)
+      run: |
+        cd KernelSU
+        echo "Current SukiSU HEAD:"
+        git describe --tags || true
+        git status --short
+        cd ..
+
+        if git -C KernelSU describe --tags | grep -qv "v3.1.8"; then
+          echo "❌ ERROR: SukiSU version is NOT v3.1.8"
+          exit 1
+        else
+          echo "✅ SukiSU Ultra v3.1.8 confirmed"
+        fi
 
     # ▼ Configure kernel
     - name: Configure kernel
       run: |
         make O=out vendor/violet-perf_defconfig
         make O=out olddefconfig
+
+        echo "Checking KernelSU config:"
+        grep CONFIG_KSU out/.config || echo "⚠️ CONFIG_KSU not found (check defconfig)"
 
     # ▼ Build kernel
     - name: Build kernel
@@ -134,7 +153,7 @@ jobs:
           kernel-violet-sukisu-signed.zip
 
     # ▼ Upload artifacts
-    - name: Upload artifacts (kernel)
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: kernel-violet-sukisu
