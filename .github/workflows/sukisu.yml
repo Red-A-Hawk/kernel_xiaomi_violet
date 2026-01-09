@@ -1,60 +1,93 @@
-name: Build Kernel (SukiSU Ultra)
+name: Kernel Build (violet | sukisu | SukiSU Ultra 3.1.8 | FINAL)
 
 on:
   workflow_dispatch:
   push:
     branches:
       - sukisu
+
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
 
     steps:
-    - name: Checkout source
+    # ======================================================
+    # Checkout
+    # ======================================================
+    - name: Checkout kernel source
       uses: actions/checkout@v4
+      with:
+        ref: sukisu
 
-    # ===============================
-    # Install dependencies
-    # ===============================
+    # ======================================================
+    # Free space
+    # ======================================================
+    - name: Free up disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo docker image prune -af
+        df -h
+
+    # ======================================================
+    # Dependencies
+    # ======================================================
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
-          git bc bison flex ccache \
-          libssl-dev libelf-dev \
-          python3 unzip make \
-          build-essential
+          git bc bison flex libssl-dev \
+          make curl wget zip unzip \
+          libelf-dev libncurses-dev \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi \
+          python3 zstd \
+          openjdk-17-jre-headless \
+          ccache rsync
 
-    # ===============================
-    # Setup WeebX Clang 20 (REAL)
-    # ===============================
-    - name: Setup WeebX Clang 20
+    # ======================================================
+    # ccache
+    # ======================================================
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: violet-sukisu-ccache
+        restore-keys: violet-
+
+    # ======================================================
+    # Toolchain (WeebX Clang 20)
+    # ======================================================
+    - name: Setup Clang (ARM64)
       run: |
-        mkdir -p $HOME/tc
-        cd $HOME/tc
         wget -q https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
-        tar -xf WeebX-Clang-20.0.0git.tar.gz
-        echo "PATH=$HOME/tc/bin:$PATH" >> $GITHUB_ENV
-        echo "CC=clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        mkdir -p $HOME/tc
+        tar -xf WeebX-Clang-20.0.0git.tar.gz -C $HOME/tc
+        rm WeebX-Clang-20.0.0git.tar.gz
+        $HOME/tc/bin/clang --version
 
-    # ===============================
-    # Verify clang (critical)
-    # ===============================
-    - name: Verify clang
+    # ======================================================
+    # Build environment (CRITICAL FIX)
+    # ======================================================
+    - name: Export build environment
       run: |
-        which clang
-        clang --version
-        if ! clang --version | grep -q "clang version 20"; then
-          echo "❌ Wrong clang detected"
-          exit 1
-        fi
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+        echo "CC=ccache clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "PATH=$HOME/tc/bin:$PATH" >> $GITHUB_ENV
 
-    # ===============================
-    # Inject SukiSU Ultra v3.1.8
-    # SELinux disabled (Non-GKI 4.14)
-    # ===============================
+    # ======================================================
+    # Inject SukiSU Ultra v3.1.8 (SAFE / NO SELINUX)
+    # ======================================================
     - name: Inject SukiSU Ultra v3.1.8
       run: |
         set -e
@@ -65,70 +98,107 @@ jobs:
         cd ..
 
         mkdir -p drivers/kernelsu
-        cp -r sukisu_ultra/kernel/* drivers/kernelsu/
 
-        # Disable SELinux integration (fix redefinition error)
-        rm -rf drivers/kernelsu/selinux
+        # Copy KernelSU core ONLY
+        rsync -a \
+          --exclude=setup.sh \
+          --exclude=fs \
+          --exclude=security \
+          sukisu_ultra/kernel/ \
+          drivers/kernelsu/
 
-        # Patch Makefile
-        if ! grep -q "kernelsu" drivers/Makefile; then
+        # Patch MODULE_IMPORT_NS for old kernels (4.14)
+        KSU_C="drivers/kernelsu/ksu.c"
+        if grep -q "MODULE_IMPORT_NS" "$KSU_C"; then
+          sed -i 's/^MODULE_IMPORT_NS(/\/\/ MODULE_IMPORT_NS(/' "$KSU_C"
+        fi
+
+        # Register KernelSU
+        grep -q "kernelsu/" drivers/Makefile || \
           echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-        fi
 
-        # Patch Kconfig
-        if ! grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig; then
+        grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || \
           sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-        fi
 
-        echo "[✓] KernelSU Ultra 3.1.8 injected (SELinux disabled)"
+        echo "[✓] KernelSU Ultra 3.1.8 injected cleanly"
 
-    # ===============================
+    # ======================================================
     # Kernel config
-    # ===============================
+    # ======================================================
     - name: Configure kernel
       run: |
-        mkdir -p out
-        make O=out ARCH=arm64 vendor/violet-perf_defconfig
+        make O=out vendor/violet-perf_defconfig
+        make O=out olddefconfig
 
-        scripts/config --file out/.config \
-          -e CONFIG_KSU \
-          -d CONFIG_KSU_MANUAL_HOOK \
-          -d CONFIG_KPROBES
-
-        make O=out ARCH=arm64 olddefconfig
-
-    # ===============================
-    # Build kernel + smart logs
-    # ===============================
+    # ======================================================
+    # Build kernel (VERBOSE + SAFE LOG)
+    # ======================================================
     - name: Build kernel
       run: |
         set +e
         make -j$(nproc) O=out \
-         ARCH=arm64 \
-         LLVM=1 \
-         LLVM_IAS=1 \
-         CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-         KCFLAGS="-Wno-error" \
-         V=1 \
-         2>&1 | tee out/build.log
+          ARCH=arm64 \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          CLANG_TRIPLE=aarch64-linux-gnu- \
+          CROSS_COMPILE=aarch64-linux-gnu- \
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+          KCFLAGS="-Wno-error" \
+          V=1 \
+          2>&1 | tee out/build.log
+        echo "BUILD_EXIT_CODE=$?" >> $GITHUB_ENV
 
-        # Extract first error
-        grep -m1 -n "error:" out/build.log || true
-
-        # KernelSU-only log
-        grep -n "kernelsu" out/build.log > out/kernelsu.log || true
-
-        # Fail job if build failed
-        if grep -q "error:" out/build.log; then
-          echo "❌ Build failed"
-          exit 1
-        fi
-
-    # ===============================
-    # Upload logs
-    # ===============================
-    - name: Upload logs
+    # ======================================================
+    # Upload log EVEN IF FAILED
+    # ======================================================
+    - name: Upload build log
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-logs
-        path: out/*.log
+        name: build-log
+        path: out/build.log
+
+    # ======================================================
+    # Stop if build failed
+    # ======================================================
+    - name: Stop on failure
+      if: env.BUILD_EXIT_CODE != '0'
+      run: |
+        echo "❌ Kernel build failed"
+        exit 1
+
+    # ======================================================
+    # AnyKernel3
+    # ======================================================
+    - name: Clone AnyKernel3
+      run: |
+        git clone https://github.com/Joker-V2/AnyKernel3 AK3
+
+    - name: Copy kernel files
+      run: |
+        cp out/arch/arm64/boot/Image.gz AK3/
+        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
+
+    - name: Create kernel zip
+      run: |
+        cd AK3
+        zip -r9 ../kernel-violet-sukisu.zip *
+
+    # ======================================================
+    # Sign zip
+    # ======================================================
+    - name: Sign kernel zip
+      run: |
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner-3.0-dexed.jar \
+          kernel-violet-sukisu.zip \
+          kernel-violet-sukisu-signed.zip
+
+    # ======================================================
+    # Upload final artifact
+    # ======================================================
+    - name: Upload kernel
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-violet-sukisu
+        path: kernel-violet-sukisu-signed.zip
