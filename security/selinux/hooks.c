@@ -98,6 +98,22 @@
 #include "audit.h"
 #include "avc_ss.h"
 
+#ifdef CONFIG_KSU
+extern bool is_ksu_transition(
+    const struct task_security_struct *old_tsec,
+    const struct task_security_struct *new_tsec
+);
+#endif
+
+#ifdef CONFIG_KSU
+bool is_ksu_transition(const struct task_security_struct *old_tsec,
+                       const struct task_security_struct *new_tsec)
+{
+    /* stub مؤقت – يسمح بانتقال KSU */
+    return true;
+}
+#endif
+
 struct selinux_state selinux_state;
 
 /* SECMARK reference count */
@@ -2440,7 +2456,12 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
 		return 0; /* neither NNP nor nosuid */
 
 	if (new_tsec->sid == old_tsec->sid)
-		return 0; /* No change in credentials */
+    return 0; /* No change in credentials */
+
+#ifdef CONFIG_KSU
+if (is_ksu_transition(old_tsec, new_tsec))
+    return 0;
+#endif
 
 	/*
 	 * If the policy enables the nnp_nosuid_transition policy capability,
