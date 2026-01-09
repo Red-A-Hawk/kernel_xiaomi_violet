@@ -105,15 +105,6 @@ extern bool is_ksu_transition(
 );
 #endif
 
-#ifdef CONFIG_KSU
-bool is_ksu_transition(const struct task_security_struct *old_tsec,
-                       const struct task_security_struct *new_tsec)
-{
-    /* stub مؤقت – يسمح بانتقال KSU */
-    return true;
-}
-#endif
-
 struct selinux_state selinux_state;
 
 /* SECMARK reference count */
