@@ -104,12 +104,13 @@ jobs:
       run: |
         set +e
         make -j$(nproc) O=out \
-          ARCH=arm64 \
-          LLVM=1 \
-          LLVM_IAS=1 \
-          KCFLAGS="-Wno-error" \
-          V=1 \
-          2>&1 | tee out/build.log
+         ARCH=arm64 \
+         LLVM=1 \
+         LLVM_IAS=1 \
+         CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+         KCFLAGS="-Wno-error" \
+         V=1 \
+         2>&1 | tee out/build.log
 
         # Extract first error
         grep -m1 -n "error:" out/build.log || true
