@@ -1,4 +1,4 @@
-name: Kernel Build (violet | sukisu | SukiSU Ultra 3.1.8 LOCKED)
+name: Kernel Build (violet | sukisu | SukiSU Ultra 3.1.8)
 
 on:
   workflow_dispatch:
@@ -12,41 +12,45 @@ jobs:
     timeout-minutes: 120
 
     steps:
-    # ===============================
-    # Checkout kernel source
-    # ===============================
+    # ======================================================
+    # Checkout
+    # ======================================================
     - name: Checkout kernel source
       uses: actions/checkout@v4
       with:
         ref: sukisu
-        fetch-depth: 1
 
-    # ===============================
-    # Free disk space
-    # ===============================
+    # ======================================================
+    # Free space
+    # ======================================================
     - name: Free up disk space
       run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
         sudo rm -rf /opt/hostedtoolcache/CodeQL
         sudo docker image prune -af
         df -h
 
-    # ===============================
-    # Install dependencies
-    # ===============================
+    # ======================================================
+    # Dependencies
+    # ======================================================
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
           git bc bison flex libssl-dev \
-          build-essential make curl wget zip unzip \
+          make curl wget zip unzip \
           libelf-dev libncurses-dev \
-          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-          python3 zstd openjdk-17-jre-headless ccache
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi \
+          python3 zstd \
+          openjdk-17-jre-headless \
+          ccache rsync
 
-    # ===============================
-    # Cache ccache
-    # ===============================
+    # ======================================================
+    # ccache
+    # ======================================================
     - name: Cache ccache
       uses: actions/cache@v4
       with:
@@ -54,20 +58,20 @@ jobs:
         key: violet-sukisu-ccache
         restore-keys: violet-
 
-    # ===============================
-    # Setup Clang
-    # ===============================
+    # ======================================================
+    # Toolchain (Clang)
+    # ======================================================
     - name: Setup Clang
       run: |
-        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz
+        wget -q https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
         mkdir -p $HOME/tc
-        tar -xf Clang-22.0.0git-20250928.tar.gz -C $HOME/tc
-        rm Clang-22.0.0git-20250928.tar.gz
+        tar -xf WeebX-Clang-20.0.0git.tar.gz -C $HOME/tc
+        rm WeebX-Clang-20.0.0git.tar.gz
         $HOME/tc/bin/clang --version
 
-    # ===============================
-    # Export build environment
-    # ===============================
+    # ======================================================
+    # Build environment
+    # ======================================================
     - name: Export build environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
@@ -80,97 +84,102 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # ==================================================
-    # Inject SukiSU Ultra v3.1.8 (MANUAL + CHECKED)
-    # ==================================================
+    # ======================================================
+    # Inject SukiSU Ultra v3.1.8 (LOCKED / FULL SOURCE)
+    # ======================================================
     - name: Inject SukiSU Ultra v3.1.8 (LOCKED)
       run: |
         set -e
 
+        echo "[+] Clone SukiSU Ultra"
         git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra sukisu_ultra
         cd sukisu_ultra
         git checkout v3.1.8
-
-        echo "[+] Verified tag:"
-        git describe --tags
-
         cd ..
 
-        # ---- drivers/kernelsu ----
-        if [ -d "sukisu_ultra/kernel/drivers/kernelsu" ]; then
-          echo "[+] Copying drivers/kernelsu"
-          cp -r sukisu_ultra/kernel/drivers/kernelsu drivers/
-        else
-          echo "[ERROR] drivers/kernelsu not found"
+        if [ ! -d sukisu_ultra/kernel ]; then
+          echo "❌ kernel directory missing"
           exit 1
         fi
 
-        # ---- security ----
-        if [ -d "sukisu_ultra/kernel/security" ]; then
-          echo "[+] Copying security"
-          cp -r sukisu_ultra/kernel/security .
-        else
-          echo "[*] security not present, skipping"
-        fi
+        echo "[+] Prepare drivers/kernelsu"
+        mkdir -p drivers/kernelsu
 
-        # ---- selinux ----
-        if [ -d "sukisu_ultra/kernel/selinux" ]; then
-          echo "[+] Copying selinux"
-          cp -r sukisu_ultra/kernel/selinux .
-        else
-          echo "[*] selinux not present, skipping"
-        fi
+        echo "[+] Copy FULL KernelSU source (exclude setup.sh)"
+        rsync -a --delete \
+          --exclude=setup.sh \
+          sukisu_ultra/kernel/ \
+          drivers/kernelsu/
 
-        # ---- Makefile hook ----
-        if ! grep -q "kernelsu" drivers/Makefile; then
-          echo "obj-\$(CONFIG_KSU) += kernelsu/" >> drivers/Makefile
-          echo "[+] drivers/Makefile patched"
-        fi
+        echo "[+] Validate critical files"
+        for f in ksu.c core_hook.c Kconfig Makefile; do
+          [ -f drivers/kernelsu/$f ] || { echo "❌ Missing $f"; exit 1; }
+        done
 
-        # ---- Kconfig hook ----
-        if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
+        echo "[+] Patch drivers/Makefile"
+        grep -q "kernelsu/" drivers/Makefile || \
+          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+
+        echo "[+] Patch drivers/Kconfig"
+        grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || \
           sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          echo "[+] drivers/Kconfig patched"
-        fi
 
-    # ===============================
-    # Configure kernel
-    # ===============================
+        echo "[✓] SukiSU Ultra v3.1.8 injected"
+
+    # ======================================================
+    # Kernel config
+    # ======================================================
     - name: Configure kernel
       run: |
         make O=out vendor/violet-perf_defconfig
         make O=out olddefconfig
 
-    # ===============================
+    # ======================================================
     # Build kernel
-    # ===============================
+    # ======================================================
     - name: Build kernel
       run: |
         make -j$(nproc) O=out \
-          ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+          ARCH=arm64 \
+          LLVM=1 \
+          LLVM_IAS=1 \
           KCFLAGS="-Wno-error" \
           2>&1 | tee out/build.log
 
-    # ===============================
-    # Package with AnyKernel3
-    # ===============================
+    # ======================================================
+    # AnyKernel3
+    # ======================================================
     - name: Clone AnyKernel3
-      run: git clone https://github.com/Joker-V2/AnyKernel3 AK3
-
-    - name: Copy kernel artifacts
       run: |
-        cp out/arch/arm64/boot/Image.gz AK3/ || true
-        cp out/arch/arm64/boot/dtbo.img AK3/ || true
+        git clone https://github.com/Joker-V2/AnyKernel3 AK3
+
+    - name: Copy kernel files
+      run: |
+        cp out/arch/arm64/boot/Image.gz AK3/
+        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
 
     - name: Create kernel zip
       run: |
         cd AK3
         zip -r9 ../kernel-violet-sukisu.zip *
 
+    # ======================================================
+    # Sign zip
+    # ======================================================
+    - name: Sign kernel zip
+      run: |
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+        java -jar zipsigner-3.0-dexed.jar \
+          kernel-violet-sukisu.zip \
+          kernel-violet-sukisu-signed.zip
+
+    # ======================================================
+    # Upload
+    # ======================================================
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: kernel-violet-sukisu
         path: |
-          kernel-violet-sukisu.zip
+          kernel-violet-sukisu-signed.zip
           out/build.log
