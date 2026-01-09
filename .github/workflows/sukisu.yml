@@ -85,55 +85,40 @@ jobs:
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
     # ======================================================
-    # Inject SukiSU Ultra v3.1.8 (LOCKED / FULL SOURCE)
+    # Inject SukiSU Ultra v3.1.8
     # ======================================================
-    - name: Inject SukiSU Ultra v3.1.8 (LOCKED)
+    - name: Inject SukiSU Ultra v3.1.8
       run: |
         set -e
 
-        echo "[+] Clone SukiSU Ultra v3.1.8"
         git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra sukisu_ultra
         cd sukisu_ultra
         git checkout v3.1.8
         cd ..
 
-        [ -d sukisu_ultra/kernel ] || { echo "❌ kernel dir missing"; exit 1; }
-
-        echo "[+] Prepare drivers/kernelsu"
         mkdir -p drivers/kernelsu
 
-        echo "[+] Copy FULL KernelSU source (no setup.sh)"
-        rsync -a --delete \
+        rsync -a \
           --exclude=setup.sh \
           sukisu_ultra/kernel/ \
           drivers/kernelsu/
 
-        echo "[+] Patch ksu.c for old kernels (MODULE_IMPORT_NS guard)"
+        # Guard MODULE_IMPORT_NS for old kernels
         KSU_C="drivers/kernelsu/ksu.c"
         if grep -q "MODULE_IMPORT_NS" "$KSU_C"; then
           sed -i '
             s/^MODULE_IMPORT_NS(/#if defined(MODULE_IMPORT_NS)\nMODULE_IMPORT_NS(/;
             s/);$/);\n#endif/
           ' "$KSU_C"
-          echo "    ✔ ksu.c patched"
-        else
-          echo "    ℹ MODULE_IMPORT_NS not found"
         fi
 
-        echo "[+] Validate critical files"
-        for f in ksu.c core_hook.c Kconfig Makefile; do
-          [ -f drivers/kernelsu/$f ] || { echo "❌ Missing $f"; exit 1; }
-        done
-
-        echo "[+] Patch drivers/Makefile"
         grep -q "kernelsu/" drivers/Makefile || \
           echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-        echo "[+] Patch drivers/Kconfig"
         grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || \
           sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-        echo "[✓] SukiSU Ultra v3.1.8 injected cleanly"
+        echo "[✓] KernelSU injected"
 
     # ======================================================
     # Kernel config
@@ -144,7 +129,7 @@ jobs:
         make O=out olddefconfig
 
     # ======================================================
-    # Build kernel
+    # Build kernel (VERBOSE)
     # ======================================================
     - name: Build kernel
       run: |
@@ -153,6 +138,7 @@ jobs:
           LLVM=1 \
           LLVM_IAS=1 \
           KCFLAGS="-Wno-error" \
+          V=1 \
           2>&1 | tee out/build.log
 
     # ======================================================
@@ -164,7 +150,13 @@ jobs:
 
     - name: Copy kernel files
       run: |
-        cp out/arch/arm64/boot/Image.gz AK3/
+        if [ -f out/arch/arm64/boot/Image.gz ]; then
+          cp out/arch/arm64/boot/Image.gz AK3/
+        else
+          echo "❌ Image.gz not generated"
+          exit 1
+        fi
+
         [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
 
     - name: Create kernel zip
