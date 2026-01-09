@@ -1,128 +1,52 @@
-name: Kernel Build (violet | sukisu | SukiSU Ultra 3.1.8)
+name: Build Kernel (Clean + Debuggable)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - sukisu
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    runs-on: ubuntu-22.04
+
+    env:
+      ARCH: arm64
+      LLVM: 1
+      LLVM_IAS: 1
+      KSU_DISABLE_SELINUX: 1
+      KCFLAGS: "-Wno-error"
 
     steps:
-    # ======================================================
-    # Checkout
-    # ======================================================
     - name: Checkout kernel source
       uses: actions/checkout@v4
-      with:
-        ref: sukisu
 
-    # ======================================================
-    # Free space
-    # ======================================================
-    - name: Free up disk space
-      run: |
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /opt/ghc
-        sudo rm -rf /opt/hostedtoolcache/CodeQL
-        sudo docker image prune -af
-        df -h
-
-    # ======================================================
-    # Dependencies
-    # ======================================================
-    - name: Install dependencies
+    - name: Setup build environment
       run: |
         sudo apt update
         sudo apt install -y \
-          git bc bison flex libssl-dev \
-          make curl wget zip unzip \
-          libelf-dev libncurses-dev \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi \
-          python3 zstd \
-          openjdk-17-jre-headless \
-          ccache rsync
+          bc bison flex git ccache \
+          libssl-dev libelf-dev \
+          clang lld llvm \
+          dwarves python3
 
-    # ======================================================
-    # ccache
-    # ======================================================
-    - name: Cache ccache
-      uses: actions/cache@v4
-      with:
-        path: ~/.ccache
-        key: violet-sukisu-ccache
-        restore-keys: violet-
-
-    # ======================================================
-    # Toolchain
-    # ======================================================
-    - name: Setup WeebX Clang 20
-      run: |
-        wget -q https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
-        mkdir -p $HOME/tc
-        tar -xf WeebX-Clang-20.0.0git.tar.gz -C $HOME/tc
-        rm WeebX-Clang-20.0.0git.tar.gz
-        $HOME/tc/bin/clang --version
-
-    # ======================================================
-    # Build environment
-    # ======================================================
-    - name: Export build environment
-      run: |
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "PATH=$HOME/tc/bin:$PATH" >> $GITHUB_ENV
-        echo "CC=ccache clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "LLVM=1" >> $GITHUB_ENV
-        echo "LLVM_IAS=1" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
-
-    # ======================================================
-    # Inject SukiSU Ultra (SELinux disabled)
-    # ======================================================
-    - name: Inject SukiSU Ultra v3.1.8
+    - name: Inject SukiSU Ultra v3.1.8 (SELinux disabled)
       run: |
         set -e
-        git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra sukisu_ultra
-        cd sukisu_ultra && git checkout v3.1.8 && cd ..
+        git clone https://github.com/SukiSU-Ultra/KernelSU.git sukisu_ultra
+        cd sukisu_ultra
+        git checkout v3.1.8
+        cd ..
+        export KSU_DISABLE_SELINUX=1
+        bash sukisu_ultra/kernel/setup.sh
 
-        mkdir -p drivers/kernelsu
-        rsync -a sukisu_ultra/kernel/ drivers/kernelsu/
-
-        # Disable MODULE_IMPORT_NS for 4.14
-        sed -i 's/^MODULE_IMPORT_NS(/\/\/ MODULE_IMPORT_NS(/' \
-          drivers/kernelsu/ksu.c || true
-
-        grep -q kernelsu drivers/Makefile || \
-          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-
-        grep -q drivers/kernelsu/Kconfig drivers/Kconfig || \
-          sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-
-        echo "[✓] KernelSU Ultra injected (SELinux disabled)"
-
-    # ======================================================
-    # Kernel config
-    # ======================================================
     - name: Configure kernel
       run: |
-        make O=out vendor/violet-perf_defconfig
-        make O=out olddefconfig
+        mkdir -p out
+        make O=out ARCH=arm64 vendor/violet-perf_defconfig
 
-    # ======================================================
-    # Build kernel (FULL LOG)
-    # ======================================================
     - name: Build kernel
       run: |
         set -o pipefail
-        make -j$(nproc) O=out \
+        make -j$(nproc) \
+          O=out \
           ARCH=arm64 \
           LLVM=1 \
           LLVM_IAS=1 \
@@ -130,29 +54,19 @@ jobs:
           V=1 \
           2>&1 | tee out/build.log
 
-    # ======================================================
-    # Extract errors
-    # ======================================================
-    - name: Extract first error
-      if: always()
+    - name: Extract first error (if any)
       run: |
-        mkdir -p out/logs
-        grep -n "error:" out/build.log | head -n 20 > out/logs/first-errors.txt || true
+        echo "==== FIRST ERROR ===="
+        grep -n -i -m1 "error:" out/build.log || echo "No errors found"
 
-    - name: Extract KernelSU log
-      if: always()
+    - name: Extract KernelSU logs only
       run: |
-        grep -n "kernelsu" out/build.log > out/logs/kernelsu.log || true
+        grep -R "kernelsu" out/build.log > out/kernelsu.log || true
 
-    # ======================================================
-    # Upload logs ALWAYS
-    # ======================================================
     - name: Upload logs
-      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-build-logs
+        name: kernel-logs
         path: |
           out/build.log
-          out/logs/first-errors.txt
-          out/logs/kernelsu.log
+          out/kernelsu.log
