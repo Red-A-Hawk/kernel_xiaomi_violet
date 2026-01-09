@@ -1,4 +1,4 @@
-name: Kernel Build & Flash Test (violet | Sukisu | WeebX-Clang20)
+name: Kernel Build (violet | sukisu | SukiSU 3.1.8 LOCKED)
 
 on:
   workflow_dispatch:
@@ -12,24 +12,27 @@ jobs:
     timeout-minutes: 120
 
     steps:
-    # ▼ Checkout kernel source (فرع sukisu)
+    # =========================
+    # Checkout
+    # =========================
     - name: Checkout kernel source
       uses: actions/checkout@v4
       with:
         ref: sukisu
         fetch-depth: 1
 
-    # ▼ Free disk space
+    # =========================
+    # Free space
+    # =========================
     - name: Free up disk space
       run: |
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /opt/ghc
-        sudo rm -rf /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune -af
         df -h
 
-    # ▼ Dependencies
+    # =========================
+    # Dependencies
+    # =========================
     - name: Install dependencies
       run: |
         sudo apt update
@@ -37,20 +40,20 @@ jobs:
           git bc bison flex libssl-dev \
           build-essential make curl wget zip unzip \
           libelf-dev libncurses-dev \
-          python3 zstd \
-          openjdk-17-jre-headless \
-          ccache
+          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+          python3 zstd openjdk-17-jre-headless ccache
 
-    # ▼ Cache ccache
     - name: Cache ccache
       uses: actions/cache@v4
       with:
         path: ~/.ccache
-        key: violet-weebx-clang20-ccache
+        key: violet-sukisu-ccache
         restore-keys: violet-
 
-    # ▼ Setup WeebX-Clang-20
-    - name: Setup WeebX-Clang-20
+    # =========================
+    # Toolchain (WeebX-Clang 20)
+    # =========================
+    - name: Setup WeebX-Clang 20
       run: |
         wget -q https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
         mkdir -p $HOME/tc
@@ -58,7 +61,6 @@ jobs:
         rm WeebX-Clang-20.0.0git.tar.gz
         $HOME/tc/bin/clang --version
 
-    # ▼ Export build environment
     - name: Export build environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
@@ -71,49 +73,35 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # ▼ Inject SukiSU Ultra v3.1.8 (controlled setup.sh)
-    - name: Inject SukiSU Ultra v3.1.8 (LOCKED)
+    # =========================
+    # Inject SukiSU Ultra 3.1.8 (NO setup.sh)
+    # =========================
+    - name: Inject SukiSU Ultra v3.1.8 (MANUAL)
       run: |
-        git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra KernelSU
-        cd KernelSU
+        git clone --depth=1 --branch v3.1.8 https://github.com/SukiSU-Ultra/SukiSU-Ultra sukisu_ultra
 
-        # تثبيت الإصدار المطلوب
-        git checkout v3.1.8
+        echo "[+] Copy drivers/kernelsu"
+        cp -r sukisu_ultra/kernel drivers/kernelsu
 
-        # تعطيل أي تحديث أو قفز داخل setup.sh
-        sed -i 's/git pull/echo "[skip] git pull"/g' kernel/setup.sh
-        sed -i 's/git checkout "$(git describe --abbrev=0 --tags)"/echo "[skip] auto tag checkout"/g' kernel/setup.sh
-        sed -i 's/git checkout "$1"/echo "[skip] arg checkout"/g' kernel/setup.sh
+        echo "[+] Inject fs / security / selinux"
+        for d in fs security selinux; do
+          if [ -d "sukisu_ultra/kernel/$d" ]; then
+            echo "  -> $d"
+            cp -rn sukisu_ultra/kernel/$d/* $d/
+          fi
+        done
 
-        cd ..
-        bash KernelSU/kernel/setup.sh
-
-    # ▼ Check: تأكيد أن الإصدار لم يقفز
-    - name: Verify SukiSU version (MUST be 3.1.8)
-      run: |
-        cd KernelSU
-        echo "Current SukiSU HEAD:"
-        git describe --tags || true
-        git status --short
-        cd ..
-
-        if git -C KernelSU describe --tags | grep -qv "v3.1.8"; then
-          echo "❌ ERROR: SukiSU version is NOT v3.1.8"
-          exit 1
-        else
-          echo "✅ SukiSU Ultra v3.1.8 confirmed"
-        fi
-
-    # ▼ Configure kernel
+    # =========================
+    # Configure kernel
+    # =========================
     - name: Configure kernel
       run: |
         make O=out vendor/violet-perf_defconfig
         make O=out olddefconfig
 
-        echo "Checking KernelSU config:"
-        grep CONFIG_KSU out/.config || echo "⚠️ CONFIG_KSU not found (check defconfig)"
-
-    # ▼ Build kernel
+    # =========================
+    # Build
+    # =========================
     - name: Build kernel
       run: |
         make -j$(nproc) O=out \
@@ -123,36 +111,39 @@ jobs:
           KCFLAGS="-Wno-error" \
           2>&1 | tee out/build.log
 
-    # ▼ Clone AnyKernel3
+    # =========================
+    # AnyKernel3
+    # =========================
     - name: Clone AnyKernel3
       run: |
         git clone https://github.com/Joker-V2/AnyKernel3 AK3
 
-    # ▼ Copy kernel artifacts
-    - name: Copy kernel files
+    - name: Copy kernel artifacts
       run: |
         cp out/arch/arm64/boot/Image.gz AK3/ || true
         cp out/arch/arm64/boot/dtbo.img AK3/ || true
 
-    # ▼ Create kernel zip
     - name: Create kernel zip
       run: |
         cd AK3
         zip -r9 ../kernel-violet-sukisu.zip *
 
-    # ▼ Download ZipSigner
+    # =========================
+    # Sign zip
+    # =========================
     - name: Download zipsigner
       run: |
         wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
 
-    # ▼ Sign kernel zip
     - name: Sign kernel zip
       run: |
         java -jar zipsigner-3.0-dexed.jar \
           kernel-violet-sukisu.zip \
           kernel-violet-sukisu-signed.zip
 
-    # ▼ Upload artifacts
+    # =========================
+    # Upload
+    # =========================
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
