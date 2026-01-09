@@ -1,190 +1,75 @@
-name: Kernel Build & Flash Test (violet | SukiSU | git-apply)
+name: Build SukiSU Kernel
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - sukisu
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
 
     steps:
-    - name: Checkout kernel source
-      uses: actions/checkout@v4
+      - name: Checkout kernel source (sukisu branch)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: sukisu   # ✅ الفرع الصحيح
 
-    - name: Free up disk space
-      run: |
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /opt/ghc
-        sudo rm -rf /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
-        df -h
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison build-essential curl flex g++ gcc git \
+            libelf-dev libssl-dev make python3 unzip zip \
+            dwarves openjdk-11-jre
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y \
-          git bc bison flex libssl-dev \
-          make curl wget zip unzip \
-          libelf-dev libncurses-dev \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi \
-          python3 zstd \
-          openjdk-17-jre-headless \
-          ccache
+      - name: Download WeebX Clang
+        run: |
+          wget "$(curl -s https://raw.githubusercontent.com/XSans0/WeebX-Clang/main/main/link.txt)" \
+            -O weebx-clang.tar.gz
+          mkdir clang
+          tar -xf weebx-clang.tar.gz -C clang
 
-    - name: Cache ccache
-      uses: actions/cache@v4
-      with:
-        path: ~/.ccache
-        key: violet-sukisu-ccache
-        restore-keys: violet-
+      - name: Export Clang environment
+        run: |
+          echo "$PWD/clang/bin" >> $GITHUB_PATH
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "LLVM=1" >> $GITHUB_ENV
+          echo "LLVM_IAS=1" >> $GITHUB_ENV
 
-    - name: Setup Clang 22
-      run: |
-        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz
-        mkdir -p $HOME/tc
-        tar -xf Clang-22.0.0git-20250920.tar.gz -C $HOME/tc
-        rm Clang-22.0.0git-20250920.tar.gz
-        $HOME/tc/bin/clang --version
+      - name: Setup SukiSU
+        run: |
+          curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU/main/kernel/setup.sh | bash -
 
-    - name: Export build environment
-      run: |
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "PATH=$HOME/tc/bin:$PATH" >> $GITHUB_ENV
-        echo "CC=ccache clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "LLVM=1" >> $GITHUB_ENV
-        echo "LLVM_IAS=1" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+      - name: Build kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
 
-    # ======================================================
-    # SukiSU Ultra builtin (بدون لمس)
-    # ======================================================
-    - name: Inject SukiSU Ultra builtin
-      run: |
-        curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh | bash -s builtin
-        echo "SukiSU Ultra builtin injected"
+          make O=out vendor/violet-perf_defconfig
+          make -j$(nproc) O=out 2>&1 | tee build.log
 
-    # ======================================================
-    # EXTRA PATCHES — git apply (NON-FATAL)
-    # ======================================================
-    - name: Apply extra patches after SukiSU Ultra builtin
-      shell: bash
-      continue-on-error: true
-      run: |
-        set +e
-        set +o pipefail
+      - name: Clone AnyKernel3
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git
 
-        PATCH_DIR=patches
-        LOG_FILE=patch-summary.log
+      - name: Prepare AnyKernel3
+        run: |
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
 
-        mkdir -p "$PATCH_DIR"
-        rm -f "$LOG_FILE"
+      - name: Create zip
+        run: |
+          cd AnyKernel3
+          zip -r ../SukiSU.zip *
 
-        # Download patches
-        wget -q -O "$PATCH_DIR/manual_hooks.patch" \
-          https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/manual_hooks.patch
+      - name: Sign zip (ZipSigner)
+        run: |
+          wget https://github.com/PatrickF1/zip-signer/releases/download/v1.1/zipsigner.jar
+          java -jar zipsigner.jar SukiSU.zip SukiSU-signed.zip
 
-        wget -q -O "$PATCH_DIR/susfs-2.0.0.patch" \
-          https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/susfs-2.0.0.patch
-
-        TOTAL=0
-        APPLIED=0
-        SKIPPED=0
-        FAILED=0
-
-        {
-          echo "========================================"
-          echo "   EXTRA PATCHES SUMMARY (git apply)"
-          echo "========================================"
-          printf "%-35s | STATUS\n" "PATCH"
-          echo "----------------------------------------"
-        } | tee -a "$LOG_FILE"
-
-        for PATCH in "$PATCH_DIR"/*.patch; do
-          NAME=$(basename "$PATCH")
-          TOTAL=$((TOTAL+1))
-
-          git apply --check "$PATCH" >>"$LOG_FILE" 2>&1
-          CHECK_RET=$?
-
-          if [ $CHECK_RET -eq 0 ]; then
-            git apply "$PATCH" >>"$LOG_FILE" 2>&1
-            printf "%-35s | APPLIED\n" "$NAME" | tee -a "$LOG_FILE"
-            APPLIED=$((APPLIED+1))
-          else
-            git apply --reverse --check "$PATCH" >>"$LOG_FILE" 2>&1
-            REV_RET=$?
-
-            if [ $REV_RET -eq 0 ]; then
-              printf "%-35s | SKIPPED\n" "$NAME" | tee -a "$LOG_FILE"
-              SKIPPED=$((SKIPPED+1))
-            else
-              printf "%-35s | FAILED\n" "$NAME" | tee -a "$LOG_FILE"
-              FAILED=$((FAILED+1))
-            fi
-          fi
-        done
-
-        {
-          echo "----------------------------------------"
-          printf "%-20s %d\n" "Total:"   "$TOTAL"
-          printf "%-20s %d\n" "Applied:" "$APPLIED"
-          printf "%-20s %d\n" "Skipped:" "$SKIPPED"
-          printf "%-20s %d\n" "Failed:"  "$FAILED"
-          echo "----------------------------------------"
-        } | tee -a "$LOG_FILE"
-
-    - name: Configure kernel
-      run: |
-        make O=out vendor/violet-perf_defconfig
-        make O=out olddefconfig
-
-    - name: Build kernel
-      run: |
-        make -j$(nproc) O=out \
-          ARCH=arm64 \
-          LLVM=1 \
-          LLVM_IAS=1 \
-          KCFLAGS="-Wno-error" \
-          2>&1 | tee out/build.log
-
-    - name: Clone AnyKernel3
-      run: |
-        git clone https://github.com/Joker-V2/AnyKernel3 AK3
-
-    - name: Copy kernel files
-      run: |
-        cp out/arch/arm64/boot/Image.gz AK3/
-        cp out/arch/arm64/boot/dtbo.img AK3/
-
-    - name: Create kernel zip
-      run: |
-        cd AK3
-        zip -r9 ../kernel-violet-sukisu-ultra.zip *
-
-    - name: Download zipsigner
-      run: |
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-
-    - name: Sign kernel zip
-      run: |
-        java -jar zipsigner-3.0-dexed.jar \
-          kernel-violet-sukisu-ultra.zip \
-          kernel-violet-sukisu-ultra-signed.zip
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: kernel-violet-sukisu-ultra
-        path: |
-          kernel-violet-sukisu-ultra-signed.zip
-          patch-summary.log
-          out/build.log
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SukiSU-Build
+          path: |
+            SukiSU-signed.zip
+            build.log
