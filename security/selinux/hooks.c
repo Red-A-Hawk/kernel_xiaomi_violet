@@ -2450,8 +2450,8 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
     return 0; /* No change in credentials */
 
 #ifdef CONFIG_KSU
-if (is_ksu_transition(old_tsec, new_tsec))
-    return 0;
+    if (is_ksu_transition(old_tsec, new_tsec))
+        return 0;
 #endif
 
 	/*
