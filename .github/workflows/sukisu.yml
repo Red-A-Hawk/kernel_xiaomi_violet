@@ -19,7 +19,7 @@ jobs:
         ref: sukisu
         fetch-depth: 1
 
-    # ▼ Clean disk space (اختياري لتجنّب نفاد المساحة)
+    # ▼ Free disk space
     - name: Free up disk space
       run: |
         sudo rm -rf /usr/share/dotnet
@@ -71,10 +71,22 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # ▼ Inject SukiSU Ultra  (builtin mode)
-    - name: Inject SukiSU Ultra v3.1.8 (builtin)
+    # ▼ Inject SukiSU Ultra v3.1.8 (FORCED / NO AUTO UPDATE)
+    - name: Inject SukiSU Ultra v3.1.8 (FORCED)
       run: |
-        curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/v3.1.8/kernel/setup.sh | bash
+        git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra KernelSU
+        cd KernelSU
+
+        # ثبّت الإصدار المطلوب
+        git checkout v3.1.8
+
+        # امنع أي ترقية تلقائية داخل setup.sh
+        sed -i 's/git fetch/echo "skip git fetch"/g' kernel/setup.sh
+        sed -i 's/git pull/echo "skip git pull"/g' kernel/setup.sh
+        sed -i 's/git checkout/echo "skip git checkout"/g' kernel/setup.sh
+
+        cd ..
+        bash KernelSU/kernel/setup.sh
 
     # ▼ Configure kernel
     - name: Configure kernel
