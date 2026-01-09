@@ -1,10 +1,9 @@
-name: Kernel Build (violet | sukisu | SukiSU Ultra 3.1.8 | FINAL)
+name: Kernel Build (violet | sukisu | SukiSU Ultra 3.1.8)
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - sukisu
+    branches: [ sukisu ]
 
 jobs:
   build:
@@ -12,193 +11,77 @@ jobs:
     timeout-minutes: 120
 
     steps:
-    # ======================================================
-    # Checkout
-    # ======================================================
-    - name: Checkout kernel source
+    - name: Checkout kernel
       uses: actions/checkout@v4
       with:
         ref: sukisu
 
-    # ======================================================
-    # Free space
-    # ======================================================
-    - name: Free up disk space
+    - name: Free space
       run: |
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /opt/ghc
-        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune -af
         df -h
 
-    # ======================================================
-    # Dependencies
-    # ======================================================
-    - name: Install dependencies
+    - name: Install deps
       run: |
         sudo apt update
         sudo apt install -y \
-          git bc bison flex libssl-dev \
-          make curl wget zip unzip \
+          git bc bison flex libssl-dev make \
           libelf-dev libncurses-dev \
           gcc-aarch64-linux-gnu \
           gcc-arm-linux-gnueabi \
-          python3 zstd \
-          openjdk-17-jre-headless \
-          ccache rsync
+          python3 zip unzip rsync ccache
 
-    # ======================================================
-    # ccache
-    # ======================================================
-    - name: Cache ccache
-      uses: actions/cache@v4
-      with:
-        path: ~/.ccache
-        key: violet-sukisu-ccache
-        restore-keys: violet-
-
-    # ======================================================
-    # Toolchain (WeebX Clang 20)
-    # ======================================================
-    - name: Setup Clang (ARM64)
+    - name: Setup WeebX Clang
       run: |
         wget -q https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
         mkdir -p $HOME/tc
         tar -xf WeebX-Clang-20.0.0git.tar.gz -C $HOME/tc
-        rm WeebX-Clang-20.0.0git.tar.gz
-        $HOME/tc/bin/clang --version
+        echo "$HOME/tc/bin" >> $GITHUB_PATH
+        clang --version
 
-    # ======================================================
-    # Build environment (CRITICAL FIX)
-    # ======================================================
-    - name: Export build environment
+    - name: Export env
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "LLVM=1" >> $GITHUB_ENV
-        echo "LLVM_IAS=1" >> $GITHUB_ENV
-        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
         echo "CC=ccache clang" >> $GITHUB_ENV
         echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "PATH=$HOME/tc/bin:$PATH" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # ======================================================
-    # Inject SukiSU Ultra v3.1.8 (SAFE / NO SELINUX)
-    # ======================================================
-    - name: Inject SukiSU Ultra v3.1.8
+    - name: Inject SukiSU Ultra 3.1.8
       run: |
-        set -e
-
-        git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra sukisu_ultra
-        cd sukisu_ultra
-        git checkout v3.1.8
-        cd ..
-
+        git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra sukisu
+        cd sukisu && git checkout v3.1.8 && cd ..
         mkdir -p drivers/kernelsu
+        rsync -a sukisu/kernel/ drivers/kernelsu/
 
-        # Copy KernelSU core ONLY
-        rsync -a \
-          --exclude=setup.sh \
-          --exclude=fs \
-          --exclude=security \
-          sukisu_ultra/kernel/ \
-          drivers/kernelsu/
+        sed -i 's/^MODULE_IMPORT_NS(/\/\/ MODULE_IMPORT_NS(/' drivers/kernelsu/ksu.c || true
 
-        # Patch MODULE_IMPORT_NS for old kernels (4.14)
-        KSU_C="drivers/kernelsu/ksu.c"
-        if grep -q "MODULE_IMPORT_NS" "$KSU_C"; then
-          sed -i 's/^MODULE_IMPORT_NS(/\/\/ MODULE_IMPORT_NS(/' "$KSU_C"
-        fi
-
-        # Register KernelSU
-        grep -q "kernelsu/" drivers/Makefile || \
-          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-
-        grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || \
+        grep -q kernelsu drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+        grep -q drivers/kernelsu/Kconfig drivers/Kconfig || \
           sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-        echo "[✓] KernelSU Ultra 3.1.8 injected cleanly"
-
-    # ======================================================
-    # Kernel config
-    # ======================================================
-    - name: Configure kernel
+    - name: Configure
       run: |
         make O=out vendor/violet-perf_defconfig
         make O=out olddefconfig
 
-    # ======================================================
-    # Build kernel (VERBOSE + SAFE LOG)
-    # ======================================================
-    - name: Build kernel
+    - name: Build (verbose)
       run: |
-        set +e
         make -j$(nproc) O=out \
           ARCH=arm64 \
-          LLVM=1 \
-          LLVM_IAS=1 \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
           CROSS_COMPILE=aarch64-linux-gnu- \
           CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+          LLVM=1 LLVM_IAS=1 \
           KCFLAGS="-Wno-error" \
-          V=1 \
-          2>&1 | tee out/build.log
-        echo "BUILD_EXIT_CODE=$?" >> $GITHUB_ENV
+          V=1 2>&1 | tee out/build.log
 
-    # ======================================================
-    # Upload log EVEN IF FAILED
-    # ======================================================
-    - name: Upload build log
+    - name: Upload log
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: build-log
         path: out/build.log
-
-    # ======================================================
-    # Stop if build failed
-    # ======================================================
-    - name: Stop on failure
-      if: env.BUILD_EXIT_CODE != '0'
-      run: |
-        echo "❌ Kernel build failed"
-        exit 1
-
-    # ======================================================
-    # AnyKernel3
-    # ======================================================
-    - name: Clone AnyKernel3
-      run: |
-        git clone https://github.com/Joker-V2/AnyKernel3 AK3
-
-    - name: Copy kernel files
-      run: |
-        cp out/arch/arm64/boot/Image.gz AK3/
-        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
-
-    - name: Create kernel zip
-      run: |
-        cd AK3
-        zip -r9 ../kernel-violet-sukisu.zip *
-
-    # ======================================================
-    # Sign zip
-    # ======================================================
-    - name: Sign kernel zip
-      run: |
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-        java -jar zipsigner-3.0-dexed.jar \
-          kernel-violet-sukisu.zip \
-          kernel-violet-sukisu-signed.zip
-
-    # ======================================================
-    # Upload final artifact
-    # ======================================================
-    - name: Upload kernel
-      uses: actions/upload-artifact@v4
-      with:
-        name: kernel-violet-sukisu
-        path: kernel-violet-sukisu-signed.zip
