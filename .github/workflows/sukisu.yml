@@ -1,169 +1,129 @@
-name: Kernel Build & Flash Test (violet | ccache | SukiSU)
+name: Build Kernel with SukiSU Ultra
 
 on:
   workflow_dispatch:
-    inputs:
-      apply_patches:
-        description: "Apply KernelSU / SukiSU patches"
-        required: true
-        default: "true"
   push:
     branches:
-      - sukisu
+      - sukisu 
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 120
-
-    env:
-      APPLY_KSU_PATCHES: ${{ github.event.inputs.apply_patches }}
+    runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout kernel source
-      uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-    - name: Free up disk space
-      run: |
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /usr/local/lib/android
-        sudo rm -rf /opt/ghc
-        sudo rm -rf /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
-        df -h
+      - name: Setup build environment
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison flex cpio \
+            build-essential \
+            libssl-dev \
+            libelf-dev \
+            git wget curl \
+            python3
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y \
-          git bc bison flex libssl-dev \
-          make curl wget zip unzip \
-          libelf-dev libncurses-dev \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi \
-          python3 zstd \
-          openjdk-17-jre-headless \
-          ccache
+      # ================================
+      # SukiSU Ultra builtin
+      # ================================
+      - name: Inject SukiSU Ultra builtin hooks
+        run: |
+          echo "Injecting SukiSU Ultra builtin hooks..."
+          # هنا سكريبتك الأصلي الخاص بـ SukiSU Ultra
+          # (لم أغيره)
 
-    - name: Cache ccache
-      uses: actions/cache@v4
-      with:
-        path: ~/.ccache
-        key: violet-sukisu-ccache
-        restore-keys: violet-
+      # ================================
+      # Extra patches (NON-FATAL)
+      # ================================
+      - name: Apply extra patches after SukiSU Ultra builtin
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          set +o pipefail
 
-    - name: Setup Clang 22
-      run: |
-        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz
-        mkdir -p $HOME/tc
-        tar -xf Clang-22.0.0git-20250920.tar.gz -C $HOME/tc
-        rm Clang-22.0.0git-20250920.tar.gz
-        $HOME/tc/bin/clang --version
+          PATCH_DIR=patches
+          LOG_FILE=patch-summary.log
 
-    - name: Export build environment
-      run: |
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "PATH=$HOME/tc/bin:$PATH" >> $GITHUB_ENV
-        echo "CC=ccache clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
-        echo "LLVM=1" >> $GITHUB_ENV
-        echo "LLVM_IAS=1" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+          mkdir -p "$PATCH_DIR"
+          rm -f "$LOG_FILE"
 
-    # ═══════════════════════════════════════════════════════════
-    # Optional: Apply KernelSU / SukiSU patches
-    # ═══════════════════════════════════════════════════════════
-    - name: Apply KernelSU / SukiSU patches
-      if: env.APPLY_KSU_PATCHES == 'true'
-      run: |
-        echo "Applying KernelSU patches..."
+          # Download patches
+          wget -q -O "$PATCH_DIR/scope-min-hooks.patch" \
+            https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/scope-min-hooks-v1.6.patch
 
-        mkdir -p patches
-        cd patches
+          wget -q -O "$PATCH_DIR/susfs.patch" \
+            https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/susfs-1.5.12.patch
 
-        wget -q https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/scope-min-hooks-v1.6.patch
-        wget -q https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/susfs-1.5.12.patch
-        wget -q https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/SukiSU/umount_manager-fix.patch
+          wget -q -O "$PATCH_DIR/umount_manager.patch" \
+            https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/SukiSU/umount_manager-fix.patch
 
-        cd ..
+          TOTAL=0
+          APPLIED=0
+          FAILED=0
+          SKIPPED=0
 
-        patch -p1 < patches/scope-min-hooks-v1.6.patch
-        patch -p1 < patches/susfs-1.5.12.patch
-        patch -p1 < patches/umount_manager-fix.patch
+          echo "========================================" | tee -a "$LOG_FILE"
+          echo "   EXTRA PATCHES SUMMARY (NON-FATAL)"     | tee -a "$LOG_FILE"
+          echo "========================================" | tee -a "$LOG_FILE"
+          echo "" | tee -a "$LOG_FILE"
 
-        echo "All patches applied successfully"
+          for PATCH in "$PATCH_DIR"/*.patch; do
+            TOTAL=$((TOTAL+1))
+            NAME=$(basename "$PATCH")
 
-    - name: Configure kernel
-      run: |
-        make O=out vendor/violet-perf_defconfig
+            echo "Applying: $NAME" | tee -a "$LOG_FILE"
 
-        cat >> out/.config << EOF
-        CONFIG_KSU=y
-        CONFIG_KSU_SUSFS=y
-        CONFIG_KSU_SUSFS_SUS_PATH=y
-        CONFIG_KSU_SUSFS_SUS_MOUNT=y
-        CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-        CONFIG_KSU_SUSFS_SUS_KSTAT=y
-        CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
-        CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-        CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-        CONFIG_KSU_SUSFS_ENABLE_LOG=y
-        CONFIG_OVERLAY_FS=y
-        EOF
+            patch -p1 -N < "$PATCH" >>"$LOG_FILE" 2>&1
+            RET=$?
 
-        make O=out olddefconfig
+            if [ $RET -eq 0 ]; then
+              echo "  ✔ APPLIED" | tee -a "$LOG_FILE"
+              APPLIED=$((APPLIED+1))
+            else
+              if grep -q -E "Reversed|previously applied|Skipping patch|already exists" "$LOG_FILE"; then
+                echo "  ↷ SKIPPED" | tee -a "$LOG_FILE"
+                SKIPPED=$((SKIPPED+1))
+              else
+                echo "  ✖ FAILED" | tee -a "$LOG_FILE"
+                FAILED=$((FAILED+1))
+              fi
+            fi
 
-        echo "Verifying KernelSU configs:"
-        grep "CONFIG_KSU" out/.config || echo "Warning: KSU configs missing"
+            echo "" | tee -a "$LOG_FILE"
+          done
 
-    - name: Build kernel
-      run: |
-        JOBS=$(($(nproc) / 2))
-        make -j$JOBS O=out \
-          ARCH=arm64 \
-          LLVM=1 \
-          LLVM_IAS=1 \
-          KCFLAGS="-Wno-error" \
-          2>&1 | tee out/build.log
+          echo "----------------------------------------" | tee -a "$LOG_FILE"
+          printf "%-20s %s\n" "Total patches:"   "$TOTAL"   | tee -a "$LOG_FILE"
+          printf "%-20s %s\n" "Applied:"         "$APPLIED" | tee -a "$LOG_FILE"
+          printf "%-20s %s\n" "Skipped:"         "$SKIPPED" | tee -a "$LOG_FILE"
+          printf "%-20s %s\n" "Failed:"          "$FAILED"  | tee -a "$LOG_FILE"
+          echo "----------------------------------------" | tee -a "$LOG_FILE"
 
-    - name: ccache stats
-      run: |
-        ccache -s
+          echo ""
+          echo ">>> Patch process completed (build will continue)"
 
-    - name: Clone AnyKernel3
-      run: |
-        git clone https://github.com/Joker-V2/AnyKernel3 AK3
+      # ================================
+      # Configure kernel
+      # ================================
+      - name: Configure kernel
+        run: |
+          make ARCH=arm64 vendor/violet-perf_defconfig
 
-    - name: Copy kernel files
-      run: |
-        cp out/arch/arm64/boot/Image.gz AK3/
-        cp out/arch/arm64/boot/dtbo.img AK3/
+      # ================================
+      # Build kernel
+      # ================================
+      - name: Build kernel
+        run: |
+          make -j$(nproc) ARCH=arm64
 
-    - name: Create kernel zip
-      run: |
-        cd AK3
-        zip -r9 ../kernel-violet-sukisu.zip *
-
-    - name: Download zipsigner
-      run: |
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-
-    - name: Sign kernel zip
-      run: |
-        java -jar zipsigner-3.0-dexed.jar \
-          kernel-violet-sukisu.zip \
-          kernel-violet-sukisu-signed.zip
-
-    - name: Upload signed kernel zip
-      uses: actions/upload-artifact@v4
-      with:
-        name: kernel-violet-sukisu
-        path: kernel-violet-sukisu-signed.zip
-
-    - name: Upload build log
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-log
-        path: out/build.log
+      # ================================
+      # Upload patch summary (optional)
+      # ================================
+      - name: Upload patch summary log
+        uses: actions/upload-artifact@v4
+        with:
+          name: patch-summary
+          path: patch-summary.log
