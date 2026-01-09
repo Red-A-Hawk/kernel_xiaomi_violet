@@ -1,49 +1,103 @@
-name: Build Kernel (Clean + Debuggable)
+name: Kernel Build (violet | SukiSU Ultra 3.1.8 | CLEAN)
 
 on:
   workflow_dispatch:
   push:
     branches:
       - sukisu
+
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
 
     env:
       ARCH: arm64
+      SUBARCH: arm64
       LLVM: 1
       LLVM_IAS: 1
       KSU_DISABLE_SELINUX: 1
       KCFLAGS: "-Wno-error"
 
     steps:
+    # ======================================================
+    # Checkout
+    # ======================================================
     - name: Checkout kernel source
       uses: actions/checkout@v4
 
-    - name: Setup build environment
+    # ======================================================
+    # Free space
+    # ======================================================
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/lib/android
+        sudo docker image prune -af
+        df -h
+
+    # ======================================================
+    # Dependencies
+    # ======================================================
+    - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
-          bc bison flex git ccache \
+          git bc bison flex make \
           libssl-dev libelf-dev \
-          clang lld llvm \
-          dwarves python3
+          libncurses-dev dwarves \
+          python3 curl wget zip unzip \
+          ccache rsync
 
-    - name: Inject SukiSU Ultra v3.1.8 (SELinux disabled)
+    # ======================================================
+    # Toolchain (Clang)
+    # ======================================================
+    - name: Setup WeebX Clang 20
+      run: |
+        wget -q https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
+        mkdir -p $HOME/tc
+        tar -xf WeebX-Clang-20.0.0git.tar.gz -C $HOME/tc
+        rm WeebX-Clang-20.0.0git.tar.gz
+        echo "$HOME/tc/bin" >> $GITHUB_PATH
+        clang --version
+
+    # ======================================================
+    # Export env
+    # ======================================================
+    - name: Export build env
+      run: |
+        echo "CC=ccache clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+
+    # ======================================================
+    # Inject SukiSU Ultra (SELinux OFF)
+    # ======================================================
+    - name: Inject SukiSU Ultra v3.1.8
       run: |
         set -e
-        git clone https://github.com/SukiSU-Ultra/KernelSU.git sukisu_ultra
-        cd sukisu_ultra
+        git clone https://github.com/SukiSU-Ultra/KernelSU.git sukisu
+        cd sukisu
         git checkout v3.1.8
         cd ..
         export KSU_DISABLE_SELINUX=1
-        bash sukisu_ultra/kernel/setup.sh
+        bash sukisu/kernel/setup.sh
+        echo "[✓] KernelSU Ultra injected (SELinux disabled)"
 
+    # ======================================================
+    # Kernel config
+    # ======================================================
     - name: Configure kernel
       run: |
         mkdir -p out
-        make O=out ARCH=arm64 vendor/violet-perf_defconfig
+        make O=out vendor/violet-perf_defconfig
+        make O=out olddefconfig
 
+    # ======================================================
+    # Build kernel (VERBOSE + LOG)
+    # ======================================================
     - name: Build kernel
       run: |
         set -o pipefail
@@ -56,19 +110,47 @@ jobs:
           V=1 \
           2>&1 | tee out/build.log
 
-    - name: Extract first error (if any)
+    # ======================================================
+    # Logs filtering
+    # ======================================================
+    - name: Extract first error
       run: |
-        echo "==== FIRST ERROR ===="
+        echo "==== FIRST ERROR (if exists) ===="
         grep -n -i -m1 "error:" out/build.log || echo "No errors found"
 
-    - name: Extract KernelSU logs only
+    - name: Extract KernelSU log only
       run: |
-        grep -R "kernelsu" out/build.log > out/kernelsu.log || true
+        grep -i "kernelsu" out/build.log > out/kernelsu.log || true
 
-    - name: Upload logs
+    # ======================================================
+    # AnyKernel3
+    # ======================================================
+    - name: Clone AnyKernel3
+      run: |
+        git clone https://github.com/Joker-V2/AnyKernel3 AK3
+
+    - name: Copy kernel image
+      run: |
+        if [ -f out/arch/arm64/boot/Image.gz ]; then
+          cp out/arch/arm64/boot/Image.gz AK3/
+        else
+          echo "❌ Image.gz not found"
+          exit 1
+        fi
+
+    - name: Create flashable zip
+      run: |
+        cd AK3
+        zip -r9 ../kernel-violet-sukisu.zip *
+
+    # ======================================================
+    # Upload artifacts
+    # ======================================================
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-logs
+        name: violet-kernel-output
         path: |
+          kernel-violet-sukisu.zip
           out/build.log
           out/kernelsu.log
