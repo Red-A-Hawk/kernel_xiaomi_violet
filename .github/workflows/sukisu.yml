@@ -1,4 +1,4 @@
-name: Kernel Build (violet | sukisu | SukiSU 3.1.8)
+name: Kernel Build & Flash Test (violet | Sukisu | WeebX-Clang20)
 
 on:
   workflow_dispatch:
@@ -12,11 +12,14 @@ jobs:
     timeout-minutes: 120
 
     steps:
+    # ▼ Checkout kernel source (فرع sukisu)
     - name: Checkout kernel source
       uses: actions/checkout@v4
       with:
         ref: sukisu
+        fetch-depth: 1
 
+    # ▼ Clean disk space (اختياري لتجنّب نفاد المساحة)
     - name: Free up disk space
       run: |
         sudo rm -rf /usr/share/dotnet
@@ -26,34 +29,36 @@ jobs:
         sudo docker image prune --all --force
         df -h
 
+    # ▼ Dependencies
     - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
           git bc bison flex libssl-dev \
-          make curl wget zip unzip \
+          build-essential make curl wget zip unzip \
           libelf-dev libncurses-dev \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabi \
           python3 zstd \
           openjdk-17-jre-headless \
           ccache
 
+    # ▼ Cache ccache
     - name: Cache ccache
       uses: actions/cache@v4
       with:
         path: ~/.ccache
-        key: violet-sukisu-ccache
+        key: violet-weebx-clang20-ccache
         restore-keys: violet-
 
-    - name: Setup Clang 22 (git)
+    # ▼ Setup WeebX-Clang-20
+    - name: Setup WeebX-Clang-20
       run: |
-        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz
+        wget -q https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
         mkdir -p $HOME/tc
-        tar -xf Clang-22.0.0git-20250928.tar.gz -C $HOME/tc
-        rm Clang-22.0.0git-20250928.tar.gz
+        tar -xf WeebX-Clang-20.0.0git.tar.gz -C $HOME/tc
+        rm WeebX-Clang-20.0.0git.tar.gz
         $HOME/tc/bin/clang --version
 
+    # ▼ Export build environment
     - name: Export build environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
@@ -66,22 +71,20 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # ======================================================
-    # SukiSU Ultra v3.1.8 ONLY
-    # ======================================================
-    - name: Inject SukiSU Ultra v3.1.8 (builtin)
+    # ▼ Inject SukiSU Ultra  (builtin mode)
+    - name: Inject SukiSU Ultra (builtin)
       run: |
-        git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra KernelSU
-        cd KernelSU
-        git checkout v3.1.8
+        cd kernel
+        bash setup.sh builtin
         cd ..
-        bash KernelSU/kernel/setup.sh builtin
 
+    # ▼ Configure kernel
     - name: Configure kernel
       run: |
         make O=out vendor/violet-perf_defconfig
         make O=out olddefconfig
 
+    # ▼ Build kernel
     - name: Build kernel
       run: |
         make -j$(nproc) O=out \
@@ -91,31 +94,37 @@ jobs:
           KCFLAGS="-Wno-error" \
           2>&1 | tee out/build.log
 
+    # ▼ Clone AnyKernel3
     - name: Clone AnyKernel3
       run: |
         git clone https://github.com/Joker-V2/AnyKernel3 AK3
 
+    # ▼ Copy kernel artifacts
     - name: Copy kernel files
       run: |
-        cp out/arch/arm64/boot/Image.gz AK3/
-        cp out/arch/arm64/boot/dtbo.img AK3/
+        cp out/arch/arm64/boot/Image.gz AK3/ || true
+        cp out/arch/arm64/boot/dtbo.img AK3/ || true
 
+    # ▼ Create kernel zip
     - name: Create kernel zip
       run: |
         cd AK3
         zip -r9 ../kernel-violet-sukisu.zip *
 
+    # ▼ Download ZipSigner
     - name: Download zipsigner
       run: |
         wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
 
+    # ▼ Sign kernel zip
     - name: Sign kernel zip
       run: |
         java -jar zipsigner-3.0-dexed.jar \
           kernel-violet-sukisu.zip \
           kernel-violet-sukisu-signed.zip
 
-    - name: Upload artifacts
+    # ▼ Upload artifacts
+    - name: Upload artifacts (kernel)
       uses: actions/upload-artifact@v4
       with:
         name: kernel-violet-sukisu
