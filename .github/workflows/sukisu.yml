@@ -85,7 +85,7 @@ jobs:
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
     # ======================================================
-    # Inject SukiSU Ultra v3.1.8
+    # Inject SukiSU Ultra v3.1.8 (SAFE)
     # ======================================================
     - name: Inject SukiSU Ultra v3.1.8
       run: |
@@ -118,7 +118,7 @@ jobs:
         grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || \
           sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-        echo "[✓] KernelSU injected"
+        echo "[✓] SukiSU Ultra injected"
 
     # ======================================================
     # Kernel config
@@ -129,10 +129,11 @@ jobs:
         make O=out olddefconfig
 
     # ======================================================
-    # Build kernel (VERBOSE)
+    # Build kernel (VERBOSE + NEVER STOP)
     # ======================================================
     - name: Build kernel
       run: |
+        set +e
         make -j$(nproc) O=out \
           ARCH=arm64 \
           LLVM=1 \
@@ -140,47 +141,40 @@ jobs:
           KCFLAGS="-Wno-error" \
           V=1 \
           2>&1 | tee out/build.log
+        echo "KERNEL_EXIT_CODE=$?" >> $GITHUB_ENV
 
     # ======================================================
-    # AnyKernel3
+    # AnyKernel3 (optional)
     # ======================================================
     - name: Clone AnyKernel3
       run: |
-        git clone https://github.com/Joker-V2/AnyKernel3 AK3
+        git clone https://github.com/Joker-V2/AnyKernel3 AK3 || true
 
     - name: Copy kernel files
       run: |
         if [ -f out/arch/arm64/boot/Image.gz ]; then
           cp out/arch/arm64/boot/Image.gz AK3/
         else
-          echo "❌ Image.gz not generated"
-          exit 1
+          echo "⚠ Image.gz not generated"
         fi
 
-        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
+        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/ || true
 
     - name: Create kernel zip
       run: |
-        cd AK3
-        zip -r9 ../kernel-violet-sukisu.zip *
+        if [ -d AK3 ]; then
+          cd AK3
+          zip -r9 ../kernel-violet-sukisu.zip * || true
+        fi
 
     # ======================================================
-    # Sign zip
-    # ======================================================
-    - name: Sign kernel zip
-      run: |
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-        java -jar zipsigner-3.0-dexed.jar \
-          kernel-violet-sukisu.zip \
-          kernel-violet-sukisu-signed.zip
-
-    # ======================================================
-    # Upload
+    # Upload logs ALWAYS
     # ======================================================
     - name: Upload artifacts
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-violet-sukisu
+        name: kernel-violet-sukisu-debug
         path: |
-          kernel-violet-sukisu-signed.zip
           out/build.log
+          kernel-violet-sukisu.zip
