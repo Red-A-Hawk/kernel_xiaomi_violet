@@ -3,7 +3,7 @@ name: Build Kernel (violet | susfs-1.5 + SukiSU Ultra)
 on:
   push:
     branches:
-      - test
+      - test-m-h-sukisu 
   workflow_dispatch:
 
 jobs:
