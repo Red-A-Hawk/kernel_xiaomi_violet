@@ -1,76 +1,110 @@
-name: Build SukiSU Kernel
+name: Build Kernel (sukisu)
 
 on:
   workflow_dispatch:
-   with:
-  ref: sukisu
+  push:
+    branches:
+      - sukisu
+
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout kernel source (sukisu branch)
+      # ===============================
+      # 1) Checkout kernel source (sukisu)
+      # ===============================
+      - name: Checkout kernel source
         uses: actions/checkout@v4
         with:
+          ref: sukisu
           fetch-depth: 1
-          ref: sukisu   # ✅ الفرع الصحيح
 
+      # ===============================
+      # 2) Install dependencies
+      # ===============================
       - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
-            bc bison build-essential curl flex g++ gcc git \
-            libelf-dev libssl-dev make python3 unzip zip \
-            dwarves openjdk-11-jre
+            git curl wget bc bison flex \
+            build-essential ccache \
+            libssl-dev libelf-dev \
+            python3 zip unzip
 
-      - name: Download WeebX Clang
+      # ===============================
+      # 3) Setup WeebX Clang (stable)
+      # ===============================
+      - name: Setup WeebX Clang
         run: |
+          mkdir -p toolchains
           wget "$(curl -s https://raw.githubusercontent.com/XSans0/WeebX-Clang/main/main/link.txt)" \
-            -O weebx-clang.tar.gz
-          mkdir clang
-          tar -xf weebx-clang.tar.gz -C clang
+            -O toolchains/weebx-clang.tar.gz
+          tar -xf toolchains/weebx-clang.tar.gz -C toolchains
+          echo "PATH=$(pwd)/toolchains/clang/bin:$PATH" >> $GITHUB_ENV
+          clang --version
 
-      - name: Export Clang environment
+      # ===============================
+      # 4) Inject SukiSU Ultra v3.1.8 (SAFE)
+      # ===============================
+      - name: Inject SukiSU Ultra v3.1.8
         run: |
-          echo "$PWD/clang/bin" >> $GITHUB_PATH
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "LLVM=1" >> $GITHUB_ENV
-          echo "LLVM_IAS=1" >> $GITHUB_ENV
+          cd kernel
+          chmod +x setup.sh
+          ./setup.sh v3.1.8
 
-      - name: Setup SukiSU
+      # ===============================
+      # 5) Kernel config
+      # ===============================
+      - name: Load defconfig
         run: |
-          curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU/main/kernel/setup.sh | bash -
+          export ARCH=arm64
+          export SUBARCH=arm64
+          make vendor/violet-perf_defconfig
 
+      # ===============================
+      # 6) Build kernel
+      # ===============================
       - name: Build kernel
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
+          export CC=clang
+          export LD=ld.lld
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export STRIP=llvm-strip
+          make -j$(nproc) 2>&1 | tee build.log
 
-          make O=out vendor/violet-perf_defconfig
-          make -j$(nproc) O=out 2>&1 | tee build.log
-
-      - name: Clone AnyKernel3
+      # ===============================
+      # 7) AnyKernel3 packaging
+      # ===============================
+      - name: Package with AnyKernel3
         run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git
-
-      - name: Prepare AnyKernel3
-        run: |
-          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
-
-      - name: Create zip
-        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+          cp out/arch/arm64/boot/Image AnyKernel3/
           cd AnyKernel3
-          zip -r ../SukiSU.zip *
+          zip -r9 kernel-unsigned.zip ./*
 
-      - name: Sign zip (ZipSigner)
+      # ===============================
+      # 8) ZipSigner
+      # ===============================
+      - name: Sign zip
         run: |
-          wget https://github.com/PatrickF1/zip-signer/releases/download/v1.1/zipsigner.jar
-          java -jar zipsigner.jar SukiSU.zip SukiSU-signed.zip
+          wget https://github.com/VR-25/ZipSigner/releases/download/v3.0/zipsigner-3.0.jar
+          java -jar zipsigner-3.0.jar \
+            AnyKernel3/kernel-unsigned.zip \
+            kernel-sukisu-signed.zip
 
+      # ===============================
+      # 9) Upload artifacts
+      # ===============================
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SukiSU-Build
+          name: sukisu-build
           path: |
-            SukiSU-signed.zip
+            kernel-sukisu-signed.zip
             build.log
