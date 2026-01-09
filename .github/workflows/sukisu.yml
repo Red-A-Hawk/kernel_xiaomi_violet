@@ -97,19 +97,12 @@ jobs:
         cd ..
 
         mkdir -p drivers/kernelsu
+        rsync -a sukisu_ultra/kernel/ drivers/kernelsu/
 
-        rsync -a \
-          --exclude=setup.sh \
-          sukisu_ultra/kernel/ \
-          drivers/kernelsu/
-
-        # Guard MODULE_IMPORT_NS for old kernels
+        # Guard MODULE_IMPORT_NS for kernel 4.14
         KSU_C="drivers/kernelsu/ksu.c"
         if grep -q "MODULE_IMPORT_NS" "$KSU_C"; then
-          sed -i '
-            s/^MODULE_IMPORT_NS(/#if defined(MODULE_IMPORT_NS)\nMODULE_IMPORT_NS(/;
-            s/);$/);\n#endif/
-          ' "$KSU_C"
+          sed -i 's/^MODULE_IMPORT_NS(/\/\/ MODULE_IMPORT_NS(/' "$KSU_C"
         fi
 
         grep -q "kernelsu/" drivers/Makefile || \
@@ -118,7 +111,7 @@ jobs:
         grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || \
           sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-        echo "[✓] SukiSU Ultra injected"
+        echo "[✓] SukiSU Ultra 3.1.8 injected"
 
     # ======================================================
     # Kernel config
@@ -129,11 +122,12 @@ jobs:
         make O=out olddefconfig
 
     # ======================================================
-    # Build kernel (VERBOSE + NEVER STOP)
+    # Build kernel (VERBOSE, NEVER STOPS JOB)
     # ======================================================
     - name: Build kernel
+      continue-on-error: true
       run: |
-        set +e
+        mkdir -p out
         make -j$(nproc) O=out \
           ARCH=arm64 \
           LLVM=1 \
@@ -141,31 +135,19 @@ jobs:
           KCFLAGS="-Wno-error" \
           V=1 \
           2>&1 | tee out/build.log
-        echo "KERNEL_EXIT_CODE=$?" >> $GITHUB_ENV
 
     # ======================================================
-    # AnyKernel3 (optional)
+    # AnyKernel3
     # ======================================================
     - name: Clone AnyKernel3
       run: |
-        git clone https://github.com/Joker-V2/AnyKernel3 AK3 || true
+        git clone https://github.com/Joker-V2/AnyKernel3 AK3
 
     - name: Copy kernel files
+      continue-on-error: true
       run: |
-        if [ -f out/arch/arm64/boot/Image.gz ]; then
-          cp out/arch/arm64/boot/Image.gz AK3/
-        else
-          echo "⚠ Image.gz not generated"
-        fi
-
-        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/ || true
-
-    - name: Create kernel zip
-      run: |
-        if [ -d AK3 ]; then
-          cd AK3
-          zip -r9 ../kernel-violet-sukisu.zip * || true
-        fi
+        [ -f out/arch/arm64/boot/Image.gz ] && cp out/arch/arm64/boot/Image.gz AK3/
+        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
 
     # ======================================================
     # Upload logs ALWAYS
@@ -174,7 +156,8 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-violet-sukisu-debug
+        name: kernel-violet-sukisu
         path: |
           out/build.log
           kernel-violet-sukisu.zip
+          kernel-violet-sukisu-signed.zip
