@@ -2,7 +2,8 @@ name: Build SukiSU Kernel
 
 on:
   workflow_dispatch:
-
+   with:
+  ref: sukisu
 jobs:
   build:
     runs-on: ubuntu-22.04
