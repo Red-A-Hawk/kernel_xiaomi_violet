@@ -72,11 +72,9 @@ jobs:
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
     # ▼ Inject SukiSU Ultra  (builtin mode)
-    - name: Inject SukiSU Ultra (builtin)
+    - name: Inject SukiSU Ultra v3.1.8 (builtin)
       run: |
-        cd kernel
-        bash setup.sh builtin
-        cd ..
+        curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/v3.1.8/kernel/setup.sh | bash -s builtin
 
     # ▼ Configure kernel
     - name: Configure kernel
