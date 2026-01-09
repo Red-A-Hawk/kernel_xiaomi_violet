@@ -1,0 +1,157 @@
+name: Kernel Build & Flash Test (violet | ccache | SukiSU)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - sukisu
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+    - name: Checkout kernel source
+      uses: actions/checkout@v4
+
+    - name: Free up disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        df -h
+    
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git bc bison flex libssl-dev \
+          make curl wget zip unzip \
+          libelf-dev libncurses-dev \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabi \
+          python3 zstd \
+          openjdk-17-jre-headless \
+          ccache
+    
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: violet-sukisu-ccache
+        restore-keys: violet-
+
+    - name: Setup Clang 22
+      run: |
+        wget -q https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250920-release/Clang-22.0.0git-20250920.tar.gz
+        mkdir -p $HOME/tc
+        tar -xf Clang-22.0.0git-20250920.tar.gz -C $HOME/tc
+        rm Clang-22.0.0git-20250920.tar.gz
+        $HOME/tc/bin/clang --version
+    
+    - name: Export build environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+        echo "PATH=$HOME/tc/bin:$PATH" >> $GITHUB_ENV
+        echo "CC=ccache clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
+    
+    # ═══════════════════════════════════════════════════════════
+    # الحل: استخدم SukiSU Ultra فقط بدون patches إضافية
+    # ═══════════════════════════════════════════════════════════
+    - name: Inject SukiSU Ultra with builtin hooks
+      run: |
+        curl -LSs 'https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh' | bash -s builtin
+        echo "SukiSU Ultra injected successfully"
+    
+    # تم حذف خطوة "Apply KernelSU non-GKI individual patches"
+    # لأن SukiSU Ultra يضيف الـ hooks تلقائياً عبر builtin mode
+    
+    - name: Configure kernel for SukiSU Ultra
+      run: |
+        # تطبيق defconfig الأساسي
+        make O=out vendor/violet-perf_defconfig
+        
+        # إضافة configs مطلوبة لـ SukiSU Ultra
+        cat >> out/.config << EOF
+        CONFIG_KSU=y
+        CONFIG_KSU_SUSFS=y
+        CONFIG_KSU_SUSFS_SUS_PATH=y
+        CONFIG_KSU_SUSFS_SUS_MOUNT=y
+        CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+        CONFIG_KSU_SUSFS_SUS_KSTAT=y
+        CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
+        CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+        CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+        CONFIG_KSU_SUSFS_ENABLE_LOG=y
+        CONFIG_OVERLAY_FS=y
+        EOF
+        
+        # إعادة تطبيق config
+        make O=out olddefconfig
+        
+        # التحقق من التفعيل
+        echo "Verifying SukiSU configurations:"
+        grep "CONFIG_KSU\|CONFIG_OVERLAY" out/.config || echo "Warning: Some configs may be missing"
+    
+    - name: Build kernel
+      run: |
+        JOBS=$(($(nproc) / 2))
+        echo "Building with $JOBS parallel jobs"
+        make -j$JOBS O=out \
+          ARCH=arm64 \
+          LLVM=1 \
+          LLVM_IAS=1 \
+          KCFLAGS="-Wno-error" \
+          2>&1 | tee out/build.log
+        find out -name "*.o" -delete
+        find out -name "*.cmd" -delete
+        df -h
+    
+    - name: ccache stats
+      run: |
+        ccache -s
+    
+    - name: Clone AnyKernel3
+      run: |
+        git clone https://github.com/Joker-V2/AnyKernel3 AK3
+    
+    - name: Copy kernel files
+      run: |
+        cp out/arch/arm64/boot/Image.gz AK3/
+        cp out/arch/arm64/boot/dtbo.img AK3/
+    
+    - name: Create kernel zip
+      run: |
+        cd AK3
+        zip -r9 ../kernel-violet-sukisu-ultra.zip *
+    
+    - name: Download zipsigner
+      run: |
+        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
+    
+    - name: Sign kernel zip
+      run: |
+        java -jar zipsigner-3.0-dexed.jar \
+          kernel-violet-sukisu-ultra.zip \
+          kernel-violet-sukisu-ultra-signed.zip
+    
+    - name: Upload signed kernel zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-violet-sukisu-ultra
+        path: kernel-violet-sukisu-ultra-signed.zip
+
+    - name: Upload build log
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: out/build.log
