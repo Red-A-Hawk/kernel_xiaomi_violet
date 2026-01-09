@@ -2,7 +2,9 @@ name: Build Kernel (Clean + Debuggable)
 
 on:
   workflow_dispatch:
-
+  push:
+    branches:
+      - sukisu
 jobs:
   build:
     runs-on: ubuntu-22.04
