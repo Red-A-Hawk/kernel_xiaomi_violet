@@ -1,4 +1,4 @@
-name: Kernel Build (violet | sukisu | SukiSU Ultra 3.1.8 CLEAN)
+name: Kernel Build (violet | sukisu | SukiSU Ultra 3.1.8)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     steps:
@@ -59,9 +59,9 @@ jobs:
         restore-keys: violet-
 
     # ======================================================
-    # Toolchain (WeebX Clang 20)
+    # Toolchain
     # ======================================================
-    - name: Setup Clang
+    - name: Setup WeebX Clang 20
       run: |
         wget -q https://github.com/XSans0/WeebX-Clang/releases/download/WeebX-Clang-20.0.0git-release/WeebX-Clang-20.0.0git.tar.gz
         mkdir -p $HOME/tc
@@ -85,43 +85,28 @@ jobs:
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
     # ======================================================
-    # Inject SukiSU Ultra v3.1.8 (CLEAN / NO SELINUX)
+    # Inject SukiSU Ultra (SELinux disabled)
     # ======================================================
     - name: Inject SukiSU Ultra v3.1.8
       run: |
         set -e
-
         git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra sukisu_ultra
-        cd sukisu_ultra
-        git checkout v3.1.8
-        cd ..
+        cd sukisu_ultra && git checkout v3.1.8 && cd ..
 
         mkdir -p drivers/kernelsu
+        rsync -a sukisu_ultra/kernel/ drivers/kernelsu/
 
-        # Copy KernelSU core ONLY (exclude selinux)
-        rsync -a \
-          --exclude=selinux \
-          sukisu_ultra/kernel/ \
-          drivers/kernelsu/
+        # Disable MODULE_IMPORT_NS for 4.14
+        sed -i 's/^MODULE_IMPORT_NS(/\/\/ MODULE_IMPORT_NS(/' \
+          drivers/kernelsu/ksu.c || true
 
-        # Hard remove in case
-        rm -rf drivers/kernelsu/selinux
-
-        # Guard MODULE_IMPORT_NS (kernel 4.14)
-        KSU_C="drivers/kernelsu/ksu.c"
-        if grep -q "MODULE_IMPORT_NS" "$KSU_C"; then
-          sed -i 's/^MODULE_IMPORT_NS(/\/\/ MODULE_IMPORT_NS(/' "$KSU_C"
-        fi
-
-        # Register Makefile
-        grep -q "kernelsu" drivers/Makefile || \
+        grep -q kernelsu drivers/Makefile || \
           echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-        # Register Kconfig
-        grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig || \
+        grep -q drivers/kernelsu/Kconfig drivers/Kconfig || \
           sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-        echo "[✓] KernelSU Ultra 3.1.8 injected (SELinux disabled)"
+        echo "[✓] KernelSU Ultra injected (SELinux disabled)"
 
     # ======================================================
     # Kernel config
@@ -132,10 +117,11 @@ jobs:
         make O=out olddefconfig
 
     # ======================================================
-    # Build kernel (VERBOSE)
+    # Build kernel (FULL LOG)
     # ======================================================
     - name: Build kernel
       run: |
+        set -o pipefail
         make -j$(nproc) O=out \
           ARCH=arm64 \
           LLVM=1 \
@@ -145,45 +131,28 @@ jobs:
           2>&1 | tee out/build.log
 
     # ======================================================
-    # AnyKernel3
+    # Extract errors
     # ======================================================
-    - name: Clone AnyKernel3
+    - name: Extract first error
+      if: always()
       run: |
-        git clone https://github.com/Joker-V2/AnyKernel3 AK3
+        mkdir -p out/logs
+        grep -n "error:" out/build.log | head -n 20 > out/logs/first-errors.txt || true
 
-    - name: Copy kernel files
+    - name: Extract KernelSU log
+      if: always()
       run: |
-        if [ -f out/arch/arm64/boot/Image.gz ]; then
-          cp out/arch/arm64/boot/Image.gz AK3/
-        else
-          echo "❌ Image.gz not generated"
-          exit 1
-        fi
-
-        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
-
-    - name: Create kernel zip
-      run: |
-        cd AK3
-        zip -r9 ../kernel-violet-sukisu.zip *
+        grep -n "kernelsu" out/build.log > out/logs/kernelsu.log || true
 
     # ======================================================
-    # Sign zip
+    # Upload logs ALWAYS
     # ======================================================
-    - name: Sign kernel zip
-      run: |
-        wget -q https://github.com/Magisk-Modules-Repo/zipsigner/raw/master/bin/zipsigner-3.0-dexed.jar
-        java -jar zipsigner-3.0-dexed.jar \
-          kernel-violet-sukisu.zip \
-          kernel-violet-sukisu-signed.zip
-
-    # ======================================================
-    # Upload
-    # ======================================================
-    - name: Upload artifacts
+    - name: Upload logs
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-violet-sukisu
+        name: kernel-build-logs
         path: |
-          kernel-violet-sukisu-signed.zip
           out/build.log
+          out/logs/first-errors.txt
+          out/logs/kernelsu.log
