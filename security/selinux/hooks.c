@@ -2444,15 +2444,15 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
 	u32 av;
 
 	if (!nnp && !nosuid)
-		return 0; /* neither NNP nor nosuid */
-
-	if (new_tsec->sid == old_tsec->sid)
-    return 0; /* No change in credentials */
+    return 0;
 
 #ifdef CONFIG_KSU
     if (is_ksu_transition(old_tsec, new_tsec))
-        return 0;
+    return 0;
 #endif
+
+    if (new_tsec->sid == old_tsec->sid)
+    return 0;
 
 	/*
 	 * If the policy enables the nnp_nosuid_transition policy capability,
