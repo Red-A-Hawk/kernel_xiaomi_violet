@@ -40,16 +40,17 @@ jobs:
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
     # 4️⃣ Inject SukiSU Ultra (builtin / manual hook)
-    - name: Inject SukiSU Ultra v3.1.8 (builtin)
+    - name: Inject SukiSU Ultra (builtin)
       run: |
         set -e
         curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh | bash -s builtin
-        
-   - name: Apply KernelSU SELinux minimal patch
+    # 4️⃣ 4️⃣ Patch hooks.c
+    - name: Apply KernelSU SELinux minimal patch
      run: |
        echo "[*] Applying ksu-selinux-minimal.patch"
        curl -L -o ksu-selinux-minimal.patch \
        https://raw.githubusercontent.com/Red-A-Hawk/Patch/kernel_xiaomi_violet/ksu-selinux-minimal.patch
+       
        git apply --check ksu-selinux-minimal.patch
        git apply ksu-selinux-minimal.patch
     
