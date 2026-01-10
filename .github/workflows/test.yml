@@ -47,10 +47,13 @@ jobs:
     # 4️⃣ 4️⃣ Patch hooks.c
     - name: Apply KernelSU SELinux minimal patch
       run: |
+       set -e
        echo "[*] Applying ksu-selinux-minimal.patch"
-       curl -L -o ksu-selinux-minimal.patch \
-       https://raw.githubusercontent.com/Red-A-Hawk/Patch/kernel_xiaomi_violet/ksu-selinux-minimal.patch
-       
+
+       cat > ksu-selinux-minimal.patch << 'EOF'
+       <الصق الباتش هنا كامل>
+       EOF
+
        git apply --check ksu-selinux-minimal.patch
        git apply ksu-selinux-minimal.patch
     
