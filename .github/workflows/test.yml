@@ -45,13 +45,13 @@ jobs:
         set -e
         curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh | bash -s builtin
 
-        # 4.5️⃣ Apply SukiSU-SUSFS 1.5.12 patch
-    - name: Apply SukiSU-SUSFS 1.5.12
+        # 4.5️⃣ Apply BACKPORT-SUSFS v1.5.7 for 4.14
+    - name: Apply SUSFS BACKPORT 1.5.7
       run: |
         set -e
-        wget -q https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/SukiSU/SukiSU-SUSFS-1.5.12.patch
-        git apply --check SukiSU-SUSFS-1.5.12.patch
-        git apply SukiSU-SUSFS-1.5.12.patch
+        wget -q https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/BACKPORT-SUSFS-v1.5.7-NON-GKI-4.14.patch
+        git apply --check BACKPORT-SUSFS-v1.5.7-NON-GKI-4.14.patch
+        git apply BACKPORT-SUSFS-v1.5.7-NON-GKI-4.14.patch
 
     # 5️⃣ Export build environment
     - name: Export build environment
