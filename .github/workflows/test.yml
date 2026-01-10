@@ -3,7 +3,7 @@ name: Build Kernel (violet | susfs-1.5 + SukiSU Ultra)
 on:
   push:
     branches:
-      - test-m-h-sukisu 
+      - test3
   workflow_dispatch:
 
 jobs:
@@ -15,7 +15,7 @@ jobs:
     - name: Checkout kernel source
       uses: actions/checkout@v4
       with:
-        ref: test-m-h-sukisu
+        ref: test3
         fetch-depth: 1
 
     # 2️⃣ Install dependencies
