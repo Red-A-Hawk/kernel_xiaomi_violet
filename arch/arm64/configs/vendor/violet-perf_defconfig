@@ -5317,7 +5317,10 @@ CONFIG_UNICODE=y
 
 #
 # Kernel hacking
-#
+# kernelsu / sukisu-ultra 
+CONFIG_KSU=y
+CONFIG_KSU_MANUAL_SU=y
+CONFIG_KSU_MANUAL_HOOK=y
 
 #
 # printk and dmesg options
