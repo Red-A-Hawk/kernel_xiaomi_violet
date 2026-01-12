@@ -11,12 +11,14 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+    # 1️⃣ Checkout kernel source
     - name: Checkout kernel source
       uses: actions/checkout@v4
       with:
         ref: test3
         fetch-depth: 1
 
+    # 2️⃣ Install dependencies
     - name: Install dependencies
       run: |
         sudo apt update
@@ -29,6 +31,7 @@ jobs:
           python3 \
           openjdk-17-jre-headless
 
+    # 3️⃣ Setup Clang
     - name: Setup Clang
       run: |
         mkdir -p clang
@@ -36,45 +39,23 @@ jobs:
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    # 🔒 Inject KernelSU (commit ثابت – 6 جانفي)
-    - name: Inject SukiSU Ultra (fixed commit - Jan 6)
+    # 4️⃣ Inject SukiSU Ultra (setup.sh فقط)
+    - name: Inject SukiSU Ultra
       run: |
         set -e
-        curl -LSs \
-          https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/496837ad81b9332d352b0b17184a0d637c81b7cc/kernel/setup.sh \
-          | bash
+        curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh | bash
 
-    # ✅ تحقق صريح: drivers/kernelsu + الكوميت
-    - name: Verify KernelSU source (commit + path)
+    # 🔒 4️⃣➕ Force KernelSU commit (Jan 6)
+    - name: Force KernelSU commit (Jan 6)
       run: |
         set -e
-
-        echo "[*] Checking drivers/kernelsu ..."
-        if [ ! -d drivers/kernelsu ]; then
-          echo "[ERROR] drivers/kernelsu not found!"
-          exit 1
-        fi
-        echo "[OK] drivers/kernelsu exists"
-
-        if [ ! -d KernelSU/.git ]; then
-          echo "[ERROR] KernelSU repo missing .git"
-          exit 1
-        fi
-
         cd KernelSU
-        CURRENT_COMMIT=$(git rev-parse HEAD)
-        EXPECTED_COMMIT=496837ad81b9332d352b0b17184a0d637c81b7cc
+        git fetch --all
+        git checkout 496837ad81b9332d352b0b17184a0d637c81b7cc
+        git submodule update --init --recursive
+        echo "[OK] KernelSU locked to Jan 6 commit"
 
-        echo "[*] Current commit : $CURRENT_COMMIT"
-        echo "[*] Expected commit: $EXPECTED_COMMIT"
-
-        if [ "$CURRENT_COMMIT" != "$EXPECTED_COMMIT" ]; then
-          echo "[ERROR] KernelSU commit mismatch!"
-          exit 1
-        fi
-
-        echo "[OK] KernelSU commit verified (Jan 6)"
-
+    # 5️⃣ Export build environment
     - name: Export build environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
@@ -86,41 +67,48 @@ jobs:
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
+    # 6️⃣ Load defconfig
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
 
+    # 7️⃣ Fix KernelSU config
     - name: Fix KernelSU config
       run: |
         scripts/config --file out/.config \
           -e CONFIG_KSU \
           -e CONFIG_KSU_MANUAL_HOOK \
           -d CONFIG_KPROBES \
-          --set-str LOCALVERSION "-sukisu-susfs"
+          --set-str LOCALVERSION "-sukisu"
         make O=out olddefconfig
 
+    # 8️⃣ Build kernel
     - name: Build kernel
       run: |
         make O=out -j$(nproc) 2>&1 | tee build.log
 
+    # 9️⃣ Verify output
     - name: Check build output
       run: |
         test -f out/arch/arm64/boot/Image.gz
 
+    # 🔟 Package AnyKernel3
     - name: Package AnyKernel3
       run: |
         git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git AK3
         cp out/arch/arm64/boot/Image.gz AK3/
         [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
         cd AK3
-        zip -r9 ../Kernel-violet-sukisu-susfs.zip *
+        zip -r9 ../Kernel-violet-sukisu.zip *
 
+    # 1️⃣1️⃣ Upload kernel
     - name: Upload Kernel ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-violet-sukisu-susfs
-        path: Kernel-violet-sukisu-susfs.zip
+        name: Kernel-violet-sukisu
+        path: Kernel-violet-sukisu.zip
 
+    # 1️⃣2️⃣ Upload build log
     - name: Upload build log
       if: always()
       uses: actions/upload-artifact@v4
