@@ -73,29 +73,6 @@ jobs:
 
         echo "[OK] KernelSU commit verified"
 
-    # Apply KernelSU non-GKI patches (كما هو)
-    - name: Apply KernelSU non-GKI individual patches
-      run: |
-        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0001-fs-exec-add-ksu-execveat-hook.patch | patch -p1 || true
-        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0002-fs-open-add-ksu-faccessat-hook.patch | patch -p1 || true
-        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0003-fs-read_write-add-ksu-vfs_read-hook.patch | patch -p1 || true
-        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0004-fs-stat-add-ksu-vfs_statx-hook.patch | patch -p1 || true
-        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0005-drivers-input-input-add-ksu-input_handle_event-hook.patch | patch -p1 || true
-        curl -fsSL https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0006-fs-namespace-add-path-umount-hook.patch | patch -p1 || true
-
-    # SUSFS 2.0 — كما هو
-    - name: Apply susfs 2.0 patch
-      run: |
-        set +e
-        curl -fsSL https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/susfs-2.0.0.patch \
-          | patch -p1 --batch --forward
-        set -e
-
-    - name: Verify susfs files
-      run: |
-        test -f fs/susfs.c || exit 1
-        test -f include/linux/susfs.h || exit 1
-
     - name: Export build environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
