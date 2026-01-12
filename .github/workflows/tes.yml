@@ -30,7 +30,6 @@ jobs:
           gcc-arm-linux-gnueabi \
           python3 \
           openjdk-17-jre-headless
-
     # 3️⃣ Setup ZyCromerZ Clang (stable مع 4.14)
     - name: Setup Clang
       run: |
@@ -38,7 +37,6 @@ jobs:
         wget -q https://github.com/ZyCromerZ/Clang/releases/download/15.0.7-20251111-release/Clang-15.0.7-20251111.tar.gz
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
         echo "$PWD/clang/bin" >> $GITHUB_PATH
-
     # 4️⃣ Inject SukiSU Ultra (builtin / manual hook)
     - name: Inject SukiSU Ultra (builtin)
       run: |
@@ -57,12 +55,10 @@ jobs:
         echo "LLVM_IAS=1" >> $GITHUB_ENV
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
-
     # 6️⃣ Load defconfig
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
-
     # 7️⃣ Ensure correct KSU config
     - name: Fix KernelSU config
       run: |
@@ -72,17 +68,14 @@ jobs:
           -d CONFIG_KPROBES \
           --set-str LOCALVERSION "-sukisu-susfs"
         make O=out olddefconfig
-
     # 8️⃣ Build kernel (مع log نظيف)
     - name: Build kernel
       run: |
         make O=out -j$(nproc) 2>&1 | tee build.log
-
     # 9️⃣ Verify output
     - name: Check build output
       run: |
         test -f out/arch/arm64/boot/Image.gz
-
     # 🔟 Package with AnyKernel3
     - name: Package AnyKernel3
       run: |
@@ -91,7 +84,6 @@ jobs:
         [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
         cd AK3
         zip -r9 ../Kernel-violet-sukisu-susfs.zip *
-
     # 1️⃣1️⃣ Upload kernel
     - name: Upload Kernel ZIP
       uses: actions/upload-artifact@v4
