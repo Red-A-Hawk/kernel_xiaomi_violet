@@ -36,10 +36,44 @@ jobs:
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
+    # 🔒 Inject KernelSU (commit ثابت – 6 جانفي)
     - name: Inject SukiSU Ultra (fixed commit - Jan 6)
       run: |
         set -e
-        curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/496837ad81b9332d352b0b17184a0d637c81b7cc/kernel/setup.sh | bash
+        curl -LSs \
+          https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/496837ad81b9332d352b0b17184a0d637c81b7cc/kernel/setup.sh \
+          | bash
+
+    # ✅ تحقق صريح: drivers/kernelsu + الكوميت
+    - name: Verify KernelSU source (commit + path)
+      run: |
+        set -e
+
+        echo "[*] Checking drivers/kernelsu ..."
+        if [ ! -d drivers/kernelsu ]; then
+          echo "[ERROR] drivers/kernelsu not found!"
+          exit 1
+        fi
+        echo "[OK] drivers/kernelsu exists"
+
+        if [ ! -d KernelSU/.git ]; then
+          echo "[ERROR] KernelSU repo missing .git"
+          exit 1
+        fi
+
+        cd KernelSU
+        CURRENT_COMMIT=$(git rev-parse HEAD)
+        EXPECTED_COMMIT=496837ad81b9332d352b0b17184a0d637c81b7cc
+
+        echo "[*] Current commit : $CURRENT_COMMIT"
+        echo "[*] Expected commit: $EXPECTED_COMMIT"
+
+        if [ "$CURRENT_COMMIT" != "$EXPECTED_COMMIT" ]; then
+          echo "[ERROR] KernelSU commit mismatch!"
+          exit 1
+        fi
+
+        echo "[OK] KernelSU commit verified (Jan 6)"
 
     - name: Export build environment
       run: |
