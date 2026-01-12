@@ -1,4 +1,4 @@
-name: Build Kernel (violet | susfs-1.5 + SukiSU Ultra)
+name: Build Kernel (violet | SukiSU Ultra + jeejox + susfs2)
 
 on:
   push:
@@ -11,14 +11,12 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    # 1️⃣ Checkout kernel source
     - name: Checkout kernel source
       uses: actions/checkout@v4
       with:
         ref: test3
         fetch-depth: 1
 
-    # 2️⃣ Install dependencies
     - name: Install dependencies
       run: |
         sudo apt update
@@ -31,7 +29,6 @@ jobs:
           python3 \
           openjdk-17-jre-headless
 
-    # 3️⃣ Setup Clang
     - name: Setup Clang
       run: |
         mkdir -p clang
@@ -39,13 +36,13 @@ jobs:
         tar -xzf Clang-15.0.7-20251111.tar.gz -C clang
         echo "$PWD/clang/bin" >> $GITHUB_PATH
 
-    # 4️⃣ Inject SukiSU Ultra (setup.sh فقط)
+    # KernelSU Ultra — setup.sh (كما هو)
     - name: Inject SukiSU Ultra
       run: |
         set -e
         curl -LSs https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh | bash
 
-    # 🔒 4️⃣➕ Force KernelSU commit (Jan 6)
+    # 🔒 قفل KernelSU على كوميت 6 جانفي (الذي نجح)
     - name: Force KernelSU commit (Jan 6)
       run: |
         set -e
@@ -55,63 +52,77 @@ jobs:
         git submodule update --init --recursive
         echo "[OK] KernelSU locked to Jan 6 commit"
 
-    # 5️⃣ Export build environment
+    # ✅ تحقق صارم من المصدر والكوميت
+    - name: Verify KernelSU source (commit + path)
+      run: |
+        set -e
+        echo "[*] Checking drivers/kernelsu ..."
+        test -d drivers/kernelsu || { echo "Error: drivers/kernelsu not found"; exit 1; }
+
+        cd KernelSU
+        CURRENT_COMMIT=$(git rev-parse HEAD)
+        EXPECTED_COMMIT=496837ad81b9332d352b0b17184a0d637c81b7cc
+
+        echo "[*] Current commit  : $CURRENT_COMMIT"
+        echo "[*] Expected commit : $EXPECTED_COMMIT"
+
+        if [ "$CURRENT_COMMIT" != "$EXPECTED_COMMIT" ]; then
+          echo "Error: KernelSU commit mismatch!"
+          exit 1
+        fi
+
+        echo "[OK] KernelSU commit verified"
+
+    # Apply KernelSU non-GKI patches (كما هو)
+    - name: Apply KernelSU non-GKI individual patches
+      run: |
+        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0001-fs-exec-add-ksu-execveat-hook.patch | patch -p1 || true
+        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0002-fs-open-add-ksu-faccessat-hook.patch | patch -p1 || true
+        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0003-fs-read_write-add-ksu-vfs_read-hook.patch | patch -p1 || true
+        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0004-fs-stat-add-ksu-vfs_statx-hook.patch | patch -p1 || true
+        curl -L https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0005-drivers-input-input-add-ksu-input_handle_event-hook.patch | patch -p1 || true
+        curl -fsSL https://raw.githubusercontent.com/jonjeexe/KernelSU_Patches/non-GKI/0006-fs-namespace-add-path-umount-hook.patch | patch -p1 || true
+
+    # SUSFS 2.0 — كما هو
+    - name: Apply susfs 2.0 patch
+      run: |
+        set +e
+        curl -fsSL https://raw.githubusercontent.com/TheSillyOk/kernel_ls_patches/master/susfs-2.0.0.patch \
+          | patch -p1 --batch --forward
+        set -e
+
+    - name: Verify susfs files
+      run: |
+        test -f fs/susfs.c || exit 1
+        test -f include/linux/susfs.h || exit 1
+
     - name: Export build environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
         echo "CC=clang" >> $GITHUB_ENV
-        echo "LD=ld.lld" >> $GITHUB_ENV
         echo "LLVM=1" >> $GITHUB_ENV
         echo "LLVM_IAS=1" >> $GITHUB_ENV
         echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
         echo "CROSS_COMPILE_ARM32=arm-linux-gnueabi-" >> $GITHUB_ENV
 
-    # 6️⃣ Load defconfig
     - name: Load defconfig
       run: |
         make O=out vendor/violet-perf_defconfig
 
-    # 7️⃣ Fix KernelSU config
-    - name: Fix KernelSU config
-      run: |
-        scripts/config --file out/.config \
-          -e CONFIG_KSU \
-          -e CONFIG_KSU_MANUAL_HOOK \
-          -d CONFIG_KPROBES \
-          --set-str LOCALVERSION "-sukisu"
-        make O=out olddefconfig
-
-    # 8️⃣ Build kernel
     - name: Build kernel
       run: |
         make O=out -j$(nproc) 2>&1 | tee build.log
 
-    # 9️⃣ Verify output
-    - name: Check build output
-      run: |
-        test -f out/arch/arm64/boot/Image.gz
-
-    # 🔟 Package AnyKernel3
     - name: Package AnyKernel3
       run: |
         git clone --depth=1 -b sixteen https://github.com/Joker-V2/AnyKernel3.git AK3
         cp out/arch/arm64/boot/Image.gz AK3/
-        [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AK3/
         cd AK3
-        zip -r9 ../Kernel-violet-sukisu.zip *
+        zip -r9 ../Kernel-violet-sukisu-susfs2.zip *
 
-    # 1️⃣1️⃣ Upload kernel
-    - name: Upload Kernel ZIP
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel-violet-sukisu
-        path: Kernel-violet-sukisu.zip
-
-    # 1️⃣2️⃣ Upload build log
-    - name: Upload build log
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-log
-        path: build.log
+        name: Kernel-violet-sukisu-susfs2
+        path: Kernel-violet-sukisu-susfs2.zip
