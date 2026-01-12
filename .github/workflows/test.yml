@@ -15,7 +15,7 @@ jobs:
     - name: Checkout kernel source
       uses: actions/checkout@v4
       with:
-        ref: 2
+        ref: test2
         fetch-depth: 1
 
     # 2️⃣ Install dependencies
