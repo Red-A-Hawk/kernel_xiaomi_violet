@@ -1,11 +1,14 @@
-name: Extract Patch from Commit
+name: act Patch from Commit
 
 on:
+  push:
+    branches:
+      - sixteen-sukisu 
   workflow_dispatch:
 
 jobs:
-  extract:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout repo (sixteen-sukisu)
