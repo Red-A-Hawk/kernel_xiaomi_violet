@@ -8,23 +8,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repo (sixteen-sukisu)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # مهم جداً حتى نقدر نجيب أي commit
+          ref: sixteen-sukisu
+          fetch-depth: 0
 
       - name: Generate patch from commit
         run: |
           COMMIT=980a0197f572fa0491780a7554d480391ca28aa0
-          git format-patch -1 $COMMIT
-          ls -lah *.patch
+          git format-patch -1 $COMMIT --stdout > backport.patch
 
-      - name: Rename patch
-        run: |
-          mv 0001-*.patch susfs-2.0.0-backport-full.patch
-
-      - name: Upload patch artifact
+      - name: Upload patch
         uses: actions/upload-artifact@v4
         with:
-          name: susfs-2.0.0-backport
-          path: susfs-2.0.0-backport-full.patch
+          name: extracted-patch
+          path: backport.patch
