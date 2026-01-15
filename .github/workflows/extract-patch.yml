@@ -1,29 +1,33 @@
-name: act Patch from Commit
+name: Extract SUSFS 1.5.12 Patch (3 commits)
 
 on:
-  push:
-    branches:
-      - sixteen-sukisu 
   workflow_dispatch:
 
 jobs:
-  build:
+  extract:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout repo (sixteen-sukisu)
+      - name: Checkout repo (susfs-1.5)
         uses: actions/checkout@v4
         with:
-          ref: sixteen-sukisu
+          ref: susfs-1.5
           fetch-depth: 0
 
-      - name: Generate patch from commit
+      - name: Generate combined patch (3 commits)
         run: |
-          COMMIT=3335650a439a47f528113353b80b50b7908d0621
-          git format-patch -1 $COMMIT --stdout > backport.patch
+          OLDEST=3335650a439a47f528113353b80b50b7908d0621
+          NEWEST=e4eedaffe0c441bc2237dc661ab2889b99371d31
+
+          git format-patch \
+            ${OLDEST}^..${NEWEST} \
+            --stdout > susfs-1.5.12.patch
+
+          echo "✅ Combined patch created:"
+          ls -lh susfs-1.5.12.patch
 
       - name: Upload patch
         uses: actions/upload-artifact@v4
         with:
-          name: extracted-patch
-          path: backport-susfs-1.5.12.patch
+          name: susfs-1.5.12-combined
+          path: susfs-1.5.12.patch
