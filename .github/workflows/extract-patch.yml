@@ -19,11 +19,11 @@ jobs:
 
       - name: Generate patch from commit
         run: |
-          COMMIT=980a0197f572fa0491780a7554d480391ca28aa0
+          COMMIT=3335650a439a47f528113353b80b50b7908d0621
           git format-patch -1 $COMMIT --stdout > backport.patch
 
       - name: Upload patch
         uses: actions/upload-artifact@v4
         with:
           name: extracted-patch
-          path: backport.patch
+          path: backport-susfs-1.5.12.patch
