@@ -14,7 +14,7 @@ jobs:
       - name: Checkout repo (susfs-1.5)
         uses: actions/checkout@v4
         with:
-          ref: sixteen-sukisu
+          ref: susfs-1.5
           fetch-depth: 0
 
       - name: Generate patch from commit
