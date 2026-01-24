@@ -1,38 +1,34 @@
-name: Extract specific commit as patch
+دname: Extract Single Commit Patch
 
 on:
   push:
     branches:
       - sixteen-sukisu
   workflow_dispatch:
-    inputs:
-      repo_url:
-        description: 'GitHub repository URL'
-        required: true
-        default: 'https://github.com/sidex15/android_kernel_lge_sm8150.git'
-      commit_sha:
-        description: 'Commit SHA to extract'
-        required: true
-        default: '87e6c1fcbd9c007b6a9e34aafdbebc86fd6590f6'
 
 jobs:
   extract:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Clone empty repo and checkout commit
+      - name: Print info
         run: |
-          echo "Repository: ${{ github.event.inputs.repo_url }}"
-          echo "Commit SHA: ${{ github.event.inputs.commit_sha }}"
+          echo "Repository: https://github.com/sidex15/android_kernel_lge_sm8150.git"
+          echo "Commit SHA: 87e6c1fcbd9c007b6a9e34aafdbebc86fd6590f6"
 
-          git init -b main repo
+      - name: Clone empty repo and fetch commit
+        run: |
+          git init repo
           cd repo
-          git remote add origin "${{ github.event.inputs.repo_url }}"
-          git fetch origin "${{ github.event.inputs.commit_sha }}"
+          git remote add origin https://github.com/sidex15/android_kernel_lge_sm8150.git
+          git fetch origin 87e6c1fcbd9c007b6a9e34aafdbebc86fd6590f6
           git checkout FETCH_HEAD
 
-          echo "Generating patch..."
+      - name: Generate patch for single commit
+        run: |
+          cd repo
           git format-patch -1 HEAD --stdout > commit.patch
+          echo "✅ Patch generated: commit.patch"
           ls -lh commit.patch
 
       - name: Upload patch artifact
