@@ -1,25 +1,41 @@
-name: Extract manual hook 1.6
+name: Extract specific commit as patch
 
 on:
   push:
     branches:
       - sixteen-sukisu
   workflow_dispatch:
+    inputs:
+      repo_url:
+        description: 'GitHub repository URL'
+        required: true
+        default: 'https://github.com/sidex15/android_kernel_lge_sm8150.git'
+      commit_sha:
+        description: 'Commit SHA to extract'
+        required: true
+        default: '87e6c1fcbd9c007b6a9e34aafdbebc86fd6590f6'
+
 jobs:
   extract:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Clone empty repo
+      - name: Clone empty repo and checkout commit
         run: |
-          git init repo
-          cd repo
-          git remote add origin https://github.com/sidex15/android_kernel_lge_sm8150.git
-          git fetch origin 87e6c1fcbd9c007b6a9e34aafdbebc86fd6590f6
-          git checkout FETCH_HEAD
-          git format-patch -1 HEAD --stdout > commit.patch
+          echo "Repository: ${{ github.event.inputs.repo_url }}"
+          echo "Commit SHA: ${{ github.event.inputs.commit_sha }}"
 
-      - name: Upload patch
+          git init -b main repo
+          cd repo
+          git remote add origin "${{ github.event.inputs.repo_url }}"
+          git fetch origin "${{ github.event.inputs.commit_sha }}"
+          git checkout FETCH_HEAD
+
+          echo "Generating patch..."
+          git format-patch -1 HEAD --stdout > commit.patch
+          ls -lh commit.patch
+
+      - name: Upload patch artifact
         uses: actions/upload-artifact@v4
         with:
           name: extracted-commit
