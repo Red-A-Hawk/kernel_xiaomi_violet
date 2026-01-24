@@ -1,4 +1,4 @@
-دname: Extract Single Commit Patch
+name: Extract Single Commit Patch
 
 on:
   push:
