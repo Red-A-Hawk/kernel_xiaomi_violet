@@ -1,8 +1,10 @@
-name: Extract Commit Patch
+name: Extract manual hook 1.6
 
 on:
+  push:
+    branches:
+      - sixteen-sukisu
   workflow_dispatch:
-
 jobs:
   extract:
     runs-on: ubuntu-22.04
