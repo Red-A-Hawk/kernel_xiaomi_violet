@@ -14,14 +14,14 @@ jobs:
       - name: Print info
         run: |
           echo "Repository: https://github.com/sidex15/android_kernel_lge_sm8150.git"
-          echo "Commit SHA: 87e6c1fcbd9c007b6a9e34aafdbebc86fd6590f6"
+          echo "Commit SHA: bb2f164bc19795ef704f17c82f04885d44421418"
 
       - name: Clone empty repo and fetch commit
         run: |
           git init repo
           cd repo
           git remote add origin https://github.com/sidex15/android_kernel_lge_sm8150.git
-          git fetch origin 87e6c1fcbd9c007b6a9e34aafdbebc86fd6590f6
+          git fetch origin bb2f164bc19795ef704f17c82f04885d44421418
           git checkout FETCH_HEAD
 
       - name: Generate patch for single commit
